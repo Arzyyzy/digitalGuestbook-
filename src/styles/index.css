@@ -1,0 +1,98 @@
+@import './fonts.css';
+@import './tailwind.css';
+@import './theme.css';
+
+/* ── Canvas glow animations ── */
+@keyframes canvas-glow-wedding {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(212,175,55,0.45), 0 8px 32px rgba(212,175,55,0.2); }
+  50%       { box-shadow: 0 0 0 2px rgba(212,175,55,0.7),  0 8px 48px rgba(212,175,55,0.4); }
+}
+@keyframes canvas-glow-graduation {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(59,130,246,0.45), 0 8px 32px rgba(59,130,246,0.2); }
+  50%       { box-shadow: 0 0 0 2px rgba(59,130,246,0.7),  0 8px 48px rgba(59,130,246,0.35); }
+}
+@keyframes canvas-glow-corporate {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(100,200,255,0.35), 0 8px 32px rgba(100,200,255,0.15); }
+  50%       { box-shadow: 0 0 0 2px rgba(100,200,255,0.55), 0 8px 48px rgba(100,200,255,0.28); }
+}
+
+/* ── Shimmer ── */
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* ── Gentle pulse ── */
+@keyframes gentle-pulse {
+  0%, 100% { opacity: 0.6; }
+  50%       { opacity: 1; }
+}
+
+/* ── Gold glow text pulse ── */
+@keyframes gold-pulse {
+  0%, 100% { text-shadow: 0 2px 20px rgba(201,168,76,0.3); }
+  50%       { text-shadow: 0 2px 40px rgba(201,168,76,0.6), 0 0 80px rgba(201,168,76,0.2); }
+}
+
+/* ── Fullscreen signage root ── */
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  min-height: 100svh;
+  min-height: 100dvh;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+}
+
+body {
+  touch-action: manipulation;
+  overscroll-behavior: none;
+  -webkit-text-size-adjust: 100%;
+}
+
+button, input, textarea, select {
+  touch-action: manipulation;
+}
+
+/* ── Prevent scrollbar flash ── */
+html {
+  overflow-x: hidden;
+}
+
+/* ── Scrollbar styling for admin ── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(255,255,255,0.03);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(201,168,76,0.25);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(201,168,76,0.45);
+}
+
+/* ── Touch optimization ── */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body,
+#root {
+  width: 100vw;
+  height: 100vh;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: #000;
+}
+
+* {
+  box-sizing: border-box;
+} 
