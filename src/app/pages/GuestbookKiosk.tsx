@@ -26,38 +26,29 @@ const THEME_META = {
 } as const;
 
 /**
- * LAYOUT — 1920×1080 signage:
+ * LAYOUT — Signage 1920×1080:
  *
- * The frame image is displayed with object-fit:cover as a full-screen overlay
- * with pointer-events:none. The transparent canvas sits BEHIND the frame and
- * fills the entire viewport, so users draw inside the frame's black hole.
+ * ── PENTING UNTUK SPLIT LAYOUT (atas: Xibo slideshow, bawah: web guestbook) ──
+ * Gunakan height: 100% bukan 100vh, karena ketika Xibo menaruh web ini
+ * di region bawah (mis. 1920×540), 100vh akan mengambil full 1080px dan
+ * menyebabkan konten terpotong. Dengan height: 100%, konten mengisi
+ * area yang diberikan Xibo saja.
  *
- * The EnhancedCanvas toolbar is rendered via portal at the BOTTOM of the
- * screen inside the frame hole area (~bottom:248px from viewport bottom),
- * so it never overlaps the floral top-left decoration of the frame.
- *
- * LAYER ORDER:
- *   z-0   background fill
- *   z-1   transparent canvas (fills screen, draws behind frame)
- *   z-2   floating particles
- *   z-5   frame overlay image (pointer-events:none)
- *   z-30  secret tap zone
- *   z-9998 idle overlay (solid dark bg — NO backdrop-filter for Xibo compat)
- *   z-9999 idle modal
- *   z-10050 toolbar (via portal)
+ * Di Xibo: set Web Region height ke setengah layar (mis. 540px untuk 1080p).
+ * Di CSS: #root height: 100% sudah di-set di index.html.
  *
  * Xibo old-browser compatibility:
  *   - NO backdrop-filter / WebkitBackdropFilter
- *   - NO conic-gradient (use linear progress bar instead)
+ *   - NO conic-gradient
  *   - NO CSS grid
  *   - Solid rgba() backgrounds only
+ *   - touch-action: none wajib di semua elemen interaktif
  */
 
 export function GuestbookKiosk() {
   const { settings, settingsLoading, settingsError, storageError, addMessage } = useGuestbook();
   const navigate   = useNavigate();
   const canvasRef  = useRef<EnhancedCanvasHandle>(null);
-  const section1Ref = useRef<HTMLDivElement>(null);
 
   const [showHearts,      setShowHearts]      = useState(false);
   const [showThx,         setShowThx]         = useState(false);
@@ -65,7 +56,7 @@ export function GuestbookKiosk() {
   const [tapCount,        setTapCount]         = useState(0);
   const [tapTimer,        setTapTimer]         = useState<ReturnType<typeof setTimeout> | null>(null);
   const [warningVisible,  setWarningVisible]   = useState(false);
-  const [countdown,       setCountdown]        = useState(10);
+  const [countdown,       setCountdown]        = useState(60);
 
   const idleTimerRef      = useRef<ReturnType<typeof setTimeout>  | null>(null);
   const warningTimerRef   = useRef<ReturnType<typeof setTimeout>  | null>(null);
@@ -74,7 +65,7 @@ export function GuestbookKiosk() {
   const theme = settings.eventType;
   const meta  = THEME_META[theme];
 
-  // ── Idle helpers ─────────────────────────────────────────────────────────────
+  // ── Idle helpers ──────────────────────────────────────────────────────────
 
   const clearIdleTimers = useCallback(() => {
     if (idleTimerRef.current)      { clearTimeout(idleTimerRef.current);       idleTimerRef.current = null; }
@@ -85,12 +76,16 @@ export function GuestbookKiosk() {
   const resetIdleWarning = useCallback(() => {
     clearIdleTimers();
     setWarningVisible(false);
-    setCountdown(10);
+    setCountdown(60);
   }, [clearIdleTimers]);
+
+  // Idle timeout ditingkatkan ke 60 detik (dari 10) agar nyaman di event
+  const IDLE_WARNING_SECONDS = 60;
+  const IDLE_TRIGGER_MS      = 90_000; // 90 detik tidak ada aktivitas → warning
 
   const triggerIdleWarning = useCallback(() => {
     setWarningVisible(true);
-    setCountdown(10);
+    setCountdown(IDLE_WARNING_SECONDS);
     countdownTimerRef.current = setInterval(() => {
       setCountdown(prev => (prev <= 1 ? 0 : prev - 1));
     }, 1000);
@@ -98,12 +93,12 @@ export function GuestbookKiosk() {
       canvasRef.current?.reset();
       setHasDrawing(false);
       resetIdleWarning();
-    }, 10000);
+    }, IDLE_WARNING_SECONDS * 1000);
   }, [resetIdleWarning]);
 
   const startIdleTimer = useCallback(() => {
     clearIdleTimers();
-    idleTimerRef.current = setTimeout(() => triggerIdleWarning(), 20000);
+    idleTimerRef.current = setTimeout(() => triggerIdleWarning(), IDLE_TRIGGER_MS);
   }, [clearIdleTimers, triggerIdleWarning]);
 
   const handleUserActivity = useCallback(() => {
@@ -114,7 +109,7 @@ export function GuestbookKiosk() {
 
   useEffect(() => () => clearIdleTimers(), [clearIdleTimers]);
 
-  // ── Canvas handlers ───────────────────────────────────────────────────────────
+  // ── Canvas handlers ────────────────────────────────────────────────────────
 
   const handleSubmit = useCallback((imageData: string) => {
     addMessage(imageData);
@@ -137,7 +132,7 @@ export function GuestbookKiosk() {
     resetIdleWarning();
   }, [resetIdleWarning]);
 
-  // ── Secret tap ────────────────────────────────────────────────────────────────
+  // ── Secret tap (5× di pojok kiri atas → admin) ───────────────────────────
 
   const handleSecretTap = () => {
     const next = tapCount + 1;
@@ -152,9 +147,16 @@ export function GuestbookKiosk() {
     }
   };
 
+  // ── Loading / Error states ─────────────────────────────────────────────────
+
   if (settingsLoading) {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0a0a0f' }}>
+      <div style={{
+        // FIX: 100% bukan 100vh — untuk split layout Xibo
+        width: '100%', height: '100%', minHeight: '100vh',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: '#0a0a0f',
+      }}>
         <p style={{ color: 'rgba(255,255,255,0.8)', fontSize: 14 }}>Memuat pengaturan event…</p>
       </div>
     );
@@ -162,31 +164,53 @@ export function GuestbookKiosk() {
 
   if (settingsError) {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0a0a0f', padding: '20px' }}>
+      <div style={{
+        width: '100%', height: '100%', minHeight: '100vh',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: '#0a0a0f', padding: '20px',
+      }}>
         <div style={{ maxWidth: '600px', textAlign: 'center', color: 'rgba(255,255,255,0.9)' }}>
           <p style={{ fontSize: 16, marginBottom: 8, color: '#ef4444' }}>⚠️ Kesalahan Pengaturan</p>
           <p style={{ fontSize: 14, marginBottom: 16 }}>{settingsError}</p>
-          <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)' }}>Hubungi admin untuk memeriksa konfigurasi event di admin panel.</p>
+          <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)' }}>
+            Hubungi admin untuk memeriksa konfigurasi event di admin panel.
+          </p>
         </div>
       </div>
     );
   }
 
-  // ── Render ────────────────────────────────────────────────────────────────────
+  // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
     <>
-      {/* Global resets — no backdrop-filter anywhere for Xibo compat */}
+      {/*
+        ── GLOBAL STYLE RESET ──────────────────────────────────────────────────
+        Paksa overflow hidden dan touch-action none di semua level.
+        Ini wajib untuk Xibo: tanpa ini, WebView akan intercept touch gestures
+        sebelum sampai ke canvas dan drawing tidak berfungsi.
+
+        CATATAN SPLIT LAYOUT:
+        Jika web ini ditampilkan di region bawah Xibo (mis. 540px tinggi),
+        gunakan: height: 100% di html/body/#root (bukan 100vh).
+        Set di index.html: <style>html, body { height: 100%; } #root { height: 100%; }</style>
+      */}
       <style>{`
         *, *::before, *::after { box-sizing: border-box; }
         html, body, #root {
           margin: 0; padding: 0;
-          width: 100%; overflow: hidden;
+          width: 100%; height: 100%;
+          overflow: hidden;
+          touch-action: none;
         }
       `}</style>
 
       {storageError && (
-        <div style={{ position: 'fixed', top: 16, left: 0, right: 0, zIndex: 9500, display: 'flex', justifyContent: 'center', padding: '0 16px', pointerEvents: 'none' }}>
+        <div style={{
+          position: 'fixed', top: 16, left: 0, right: 0, zIndex: 9500,
+          display: 'flex', justifyContent: 'center', padding: '0 16px',
+          pointerEvents: 'none',
+        }}>
           <div style={{ width: '100%', maxWidth: 760, pointerEvents: 'auto' }}>
             <Alert variant="destructive" className="shadow-2xl">
               <AlertTitle>Masalah Penyimpanan</AlertTitle>
@@ -196,19 +220,28 @@ export function GuestbookKiosk() {
         </div>
       )}
 
-      {/* ── Root fullscreen container ── */}
-      <div style={{ position: 'fixed', inset: 0, width: '100vw', height: '100vh', background: meta.bg, overflow: 'hidden' }}>
-        <div
-          ref={section1Ref}
-          style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden' }}
-        >
+      {/*
+        ── Root container ───────────────────────────────────────────────────────
+        FIX: position: fixed + inset:0 diganti ke width/height: 100%
+        agar tidak keluar dari area region Xibo saat split layout.
+        position: fixed mengambil full window, bukan area region.
+      */}
+      <div style={{
+        position: 'relative',
+        width:    '100%',
+        height:   '100%',
+        background: meta.bg,
+        overflow: 'hidden',
+        touchAction: 'none',
+      }}>
+        <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden' }}>
 
-          {/* ── Transparent canvas — fills entire screen behind frame ── */}
-          <div
-            style={{ position: 'absolute', inset: 0, zIndex: 1, width: '100%', height: '100%' }}
-            data-kiosk-canvas=""
-            onLoad={() => console.log('[Kiosk] Canvas container mounted')}
-          >
+          {/* ── Canvas: fills container, behind frame ── */}
+          <div style={{
+            position: 'absolute', inset: 0, zIndex: 1,
+            width: '100%', height: '100%',
+            touchAction: 'none',
+          }}>
             <EnhancedCanvas
               ref={canvasRef}
               theme={theme}
@@ -228,57 +261,39 @@ export function GuestbookKiosk() {
             <FloatingParticles />
           </div>
 
-          {/*
-            ── Frame overlay image ──
-            Full-screen, object-fit:cover so frame fills 1920×1080.
-            pointer-events:none keeps canvas & toolbar fully interactive.
-          */}
+          {/* ── Frame overlay ── */}
           {settings.frameUrl && (
             <img
               src={settings.frameUrl}
               alt="Frame overlay"
               style={{
-                position:        'absolute',
-                inset:           0,
-                width:           '100%',
-                height:          '100%',
-                objectFit:       'cover',
-                objectPosition:  'center',
-                zIndex:          5,
-                pointerEvents:   'none',
-                display:         'block',
+                position: 'absolute', inset: 0,
+                width: '100%', height: '100%',
+                objectFit: 'cover', objectPosition: 'center',
+                zIndex: 5,
+                pointerEvents: 'none',
+                display: 'block',
               }}
             />
           )}
 
-          {/*
-            ── Idle overlay ──
-            Solid semi-transparent dark background.
-            NO backdrop-filter — not supported in Xibo's old browser.
-          */}
+          {/* ── Idle overlay: solid bg, NO backdrop-filter (Xibo compat) ── */}
           <AnimatePresence>
             {warningVisible && (
               <motion.div
                 key="idle-overlay"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
+                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                 transition={{ duration: 0.3 }}
                 style={{
-                  position: 'fixed',
-                  inset:    0,
-                  zIndex:   9998,
+                  position: 'absolute', inset: 0, zIndex: 9998,
                   background: 'rgba(0,0,0,0.72)',
+                  touchAction: 'none',
                 }}
               />
             )}
           </AnimatePresence>
 
-          {/*
-            ── Idle confirmation modal ──
-            Solid white background (NO backdrop-filter for Xibo compat).
-            NO conic-gradient countdown — use simple linear progress bar.
-          */}
+          {/* ── Idle modal ── */}
           <AnimatePresence>
             {warningVisible && (
               <motion.div
@@ -288,71 +303,57 @@ export function GuestbookKiosk() {
                 exit={{ opacity: 0, scale: 0.92 }}
                 transition={{ duration: 0.3, ease: 'easeOut' }}
                 style={{
-                  position:  'fixed',
-                  top:       '50%',
-                  left:      '50%',
+                  position: 'absolute',
+                  top: '50%', left: '50%',
                   transform: 'translate(-50%, -50%)',
-                  zIndex:    9999,
-                  width:     'calc(100% - 32px)',
-                  maxWidth:  520,
+                  zIndex: 9999,
+                  width: 'calc(100% - 32px)', maxWidth: 520,
+                  touchAction: 'none',
                 }}
               >
-                <div
-                  style={{
-                    borderRadius: 20,
-                    padding:      32,
-                    background:   '#ffffff',
-                    border:       '1px solid rgba(0,0,0,0.08)',
-                    boxShadow:    '0 24px 64px rgba(0,0,0,0.25)',
-                  }}
-                >
-                  {/* Title */}
+                <div style={{
+                  borderRadius: 20, padding: 32,
+                  background: '#ffffff',
+                  border: '1px solid rgba(0,0,0,0.08)',
+                  boxShadow: '0 24px 64px rgba(0,0,0,0.25)',
+                }}>
                   <p style={{ fontSize: 22, fontWeight: 700, color: '#111827', textAlign: 'center', marginBottom: 8 }}>
                     Masih ingin melanjutkan?
                   </p>
-
-                  {/* Description */}
                   <p style={{ textAlign: 'center', color: '#6b7280', fontSize: 15, lineHeight: 1.6, marginBottom: 24 }}>
                     Sesi akan direset jika tidak ada aktivitas.
                   </p>
 
-                  {/* Countdown — simple linear progress bar (Xibo safe) */}
                   <div style={{ textAlign: 'center', marginBottom: 28 }}>
                     <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 10 }}>Otomatis reset dalam</p>
                     <p style={{ fontSize: 42, fontWeight: 800, color: '#111827', lineHeight: 1, marginBottom: 12 }}>
                       {countdown}
                       <span style={{ fontSize: 16, fontWeight: 500, color: '#9ca3af', marginLeft: 6 }}>detik</span>
                     </p>
-                    {/* Progress bar instead of conic-gradient */}
+                    {/* Progress bar — NO conic-gradient (Xibo compat) */}
                     <div style={{ height: 6, borderRadius: 3, background: 'rgba(212,175,55,0.2)', overflow: 'hidden' }}>
                       <motion.div
                         style={{
-                          height:       '100%',
-                          borderRadius: 3,
-                          background:   'linear-gradient(90deg,#D4AF37,#F4D03F)',
-                          originX:      0,
+                          height: '100%', borderRadius: 3,
+                          background: 'linear-gradient(90deg,#D4AF37,#F4D03F)',
+                          originX: 0,
                         }}
-                        animate={{ scaleX: countdown / 10 }}
+                        animate={{ scaleX: countdown / IDLE_WARNING_SECONDS }}
                         transition={{ duration: 0.9, ease: 'linear' }}
                       />
                     </div>
                   </div>
 
-                  {/* Action buttons */}
                   <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
                     <button
                       onClick={handleUserActivity}
                       style={{
-                        flex:         1,
-                        padding:      '12px 20px',
-                        borderRadius: 12,
-                        fontWeight:   700,
-                        color:        '#fff',
-                        background:   'linear-gradient(135deg, #D4AF37, #F0D080)',
-                        border:       'none',
-                        cursor:       'pointer',
-                        fontSize:     15,
-                        boxShadow:    '0 4px 15px rgba(212,175,55,0.3)',
+                        flex: 1, padding: '12px 20px', borderRadius: 12,
+                        fontWeight: 700, color: '#fff',
+                        background: 'linear-gradient(135deg, #D4AF37, #F0D080)',
+                        border: 'none', cursor: 'pointer', fontSize: 15,
+                        boxShadow: '0 4px 15px rgba(212,175,55,0.3)',
+                        touchAction: 'none',
                       }}
                     >
                       ✎ Lanjutkan
@@ -364,15 +365,12 @@ export function GuestbookKiosk() {
                         resetIdleWarning();
                       }}
                       style={{
-                        flex:         1,
-                        padding:      '12px 20px',
-                        borderRadius: 12,
-                        fontWeight:   700,
-                        color:        '#64748b',
-                        background:   'rgba(100,116,139,0.08)',
-                        border:       '1.5px solid rgba(100,116,139,0.25)',
-                        cursor:       'pointer',
-                        fontSize:     15,
+                        flex: 1, padding: '12px 20px', borderRadius: 12,
+                        fontWeight: 700, color: '#64748b',
+                        background: 'rgba(100,116,139,0.08)',
+                        border: '1.5px solid rgba(100,116,139,0.25)',
+                        cursor: 'pointer', fontSize: 15,
+                        touchAction: 'none',
                       }}
                     >
                       🗑 Reset Sekarang
@@ -383,19 +381,20 @@ export function GuestbookKiosk() {
             )}
           </AnimatePresence>
 
-          {/* ── Secret tap zone (top-left corner, 5× tap → admin) ── */}
+          {/* ── Secret tap zone ── */}
           <div
             onClick={handleSecretTap}
             style={{
               position: 'absolute', top: 0, left: 0,
               width: 64, height: 64, zIndex: 30,
               opacity: 0, cursor: 'pointer',
+              touchAction: 'none',
             }}
           />
         </div>
       </div>
 
-      {/* ── Global fixed overlays ─────────────────────────────────────────── */}
+      {/* ── Global overlays ──────────────────────────────────────────────────── */}
 
       <HeartAnimation
         trigger={showHearts}
@@ -403,30 +402,24 @@ export function GuestbookKiosk() {
         color={meta.heartColor}
       />
 
-      {/* Thank-you toast — solid bg, NO backdrop-filter */}
+      {/* Thank-you toast */}
       <AnimatePresence>
         {showThx && (
           <motion.div
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             style={{
-              position:   'fixed',
-              inset:      0,
-              zIndex:     9000,
-              display:    'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
+              position: 'fixed', inset: 0, zIndex: 9000,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
               background: 'rgba(0,0,0,0.35)',
+              touchAction: 'none',
             }}
           >
             <motion.div
               initial={{ scale: 0.8, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.8, y: 20 }}
               style={{
-                background:   '#fff',
-                borderRadius: 28,
-                padding:      '36px 48px',
-                boxShadow:    '0 24px 64px rgba(0,0,0,0.2)',
-                textAlign:    'center',
-                maxWidth:     320,
+                background: '#fff', borderRadius: 28, padding: '36px 48px',
+                boxShadow: '0 24px 64px rgba(0,0,0,0.2)',
+                textAlign: 'center', maxWidth: 320,
               }}
             >
               <div style={{ fontSize: 48, marginBottom: 12 }}>✨</div>
@@ -441,8 +434,7 @@ export function GuestbookKiosk() {
                   initial={{ width: '0%' }} animate={{ width: '100%' }}
                   transition={{ duration: 3, ease: 'linear' }}
                   style={{
-                    height:     '100%',
-                    borderRadius: 2,
+                    height: '100%', borderRadius: 2,
                     background: `linear-gradient(to right, ${meta.accentColor}, #F4D03F)`,
                   }}
                 />
