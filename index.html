@@ -3,29 +3,20 @@
   <head>
     <meta charset="UTF-8" />
     <!--
-      viewport: initial-scale=1.0 tanpa user-scalable=no
-      Di Xibo, user-scalable=no kadang conflict dengan touch event handling.
-      Biarkan default, scaling dikontrol dari Xibo region settings.
+      viewport: JANGAN pakai width=device-width di XHB
+      XHB sering punya viewport yang salah. Biarkan default.
+      user-scalable=no bisa conflict dengan touch di XHB lama.
     -->
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="initial-scale=1.0" />
     <title>Digital Guestbook</title>
     <style>
       /*
-        PENTING UNTUK XIBO SIGNAGE:
+        XHB SIGNAGE — Critical CSS
 
-        Gunakan height: 100%, BUKAN height: 100vh.
-
-        Alasan:
-        - 100vh di Xibo mengambil tinggi penuh monitor (mis. 1080px)
-          meskipun web region yang dialokasikan hanya setengahnya (540px).
-        - 100% mengikuti tinggi container yang diberikan Xibo.
-
-        Untuk split layout (atas: slideshow, bawah: guestbook):
-        Set Xibo Web Region: width=1920, height=540, y=540 (bottom half).
-        Web akan otomatis mengisi area tersebut dengan height: 100%.
-
-        touch-action: none di html/body WAJIB agar touch events sampai
-        ke canvas tanpa diintercept browser/Xibo sebagai scroll gesture.
+        ✅ height: 100% bukan 100vh (XHB fake viewport)
+        ✅ touch-action: none di semua level
+        ✅ overflow: hidden wajib
+        ✅ -ms-touch-action untuk XHB Windows-based player
       */
       html, body {
         margin: 0;
@@ -35,12 +26,17 @@
         overflow: hidden;
         touch-action: none;
         -ms-touch-action: none;
+        -webkit-tap-highlight-color: transparent;
       }
       #root {
         width: 100%;
         height: 100%;
         overflow: hidden;
         touch-action: none;
+      }
+      /* Prevent any accidental scroll bounce */
+      * {
+        -webkit-overflow-scrolling: auto;
       }
     </style>
   </head>

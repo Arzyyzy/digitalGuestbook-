@@ -1,61 +1,27 @@
-import { useRef, useEffect, useState, useCallback, forwardRef, useImperativeHandle } from 'react';
+/**
+ * EnhancedCanvas.tsx — XHB/Xibo Signage Edition
+ *
+ * Prinsip utama untuk XHB custom mainboard player:
+ *  - ZERO CSS transform / scale / translate
+ *  - Canvas size dari offsetWidth/offsetHeight (bukan getBoundingClientRect)
+ *    karena XHB sering fake viewport di getBoundingClientRect
+ *  - touch-action: none di SEMUA elemen, injected di level document juga
+ *  - Triple event: touchstart + pointerdown + mousedown, deduplicated
+ *  - position: fixed untuk toolbar (bukan absolute di dalam wrapper)
+ *  - Tidak ada backdrop-filter, grid, conic-gradient, vh
+ */
+
+import {
+  useRef, useEffect, useState, useCallback,
+  forwardRef, useImperativeHandle,
+} from 'react';
 import { createPortal } from 'react-dom';
-import { motion, AnimatePresence } from 'motion/react';
-import { ChevronLeft, ChevronRight, Pen, Eraser, Undo2, Trash2, Send } from 'lucide-react';
+import { Pen, Eraser, Undo2, Trash2, Send, ChevronLeft, ChevronRight } from 'lucide-react';
 import { EventType } from '../contexts/GuestbookContext';
 
+// ─── Types ────────────────────────────────────────────────────────────────────
+
 type Tool = 'pen' | 'eraser';
-
-const SIZES = [
-  { value: 2,  label: 'XS' },
-  { value: 5,  label: 'S'  },
-  { value: 9,  label: 'M'  },
-  { value: 15, label: 'L'  },
-];
-
-const COLORS = [
-  '#1a0a00',
-  '#2C1810',
-  '#722F37',
-  '#1e3a8a',
-  '#2D5A27',
-  '#4C1D95',
-  '#C9A84C',
-  '#4B5563',
-];
-
-const THEME_CFG = {
-  wedding: {
-    borderColor: 'rgba(212,175,55,0.55)',
-    glowColor:   'rgba(212,175,55,0.35)',
-    btnGrad:     'linear-gradient(135deg,#D4AF37 0%,#F4D03F 100%)',
-    btnShadow:   '0 4px 24px rgba(212,175,55,0.55)',
-    defaultColor:'#2C1810',
-    canvasBg:    '#FFFEF9',
-    hint:        'Tulis pesan & nama Anda di sini…',
-    submitLabel: 'Kirim Ucapan',
-  },
-  graduation: {
-    borderColor: 'rgba(59,130,246,0.55)',
-    glowColor:   'rgba(59,130,246,0.3)',
-    btnGrad:     'linear-gradient(135deg,#1e3a8a 0%,#3b82f6 100%)',
-    btnShadow:   '0 4px 24px rgba(30,58,138,0.55)',
-    defaultColor:'#1e3a8a',
-    canvasBg:    '#FAFCFF',
-    hint:        'Tulis ucapan wisuda Anda di sini…',
-    submitLabel: 'Kirim Ucapan',
-  },
-  corporate: {
-    borderColor: 'rgba(100,200,255,0.45)',
-    glowColor:   'rgba(100,200,255,0.25)',
-    btnGrad:     'linear-gradient(135deg,#1e293b 0%,#334155 100%)',
-    btnShadow:   '0 4px 24px rgba(100,200,255,0.35)',
-    defaultColor:'#1f2937',
-    canvasBg:    '#FAFAFA',
-    hint:        'Tulis pesan korporat Anda di sini…',
-    submitLabel: 'Kirim Pesan',
-  },
-} as const;
 
 export interface EnhancedCanvasHandle {
   reset: () => void;
@@ -75,6 +41,28 @@ interface EnhancedCanvasProps {
   className?: string;
 }
 
+// ─── Config ───────────────────────────────────────────────────────────────────
+
+const SIZES: { value: number; label: string }[] = [
+  { value: 2,  label: 'XS' },
+  { value: 5,  label: 'S'  },
+  { value: 9,  label: 'M'  },
+  { value: 15, label: 'L'  },
+];
+
+const COLORS = [
+  '#1a0a00', '#2C1810', '#722F37', '#1e3a8a',
+  '#2D5A27', '#4C1D95', '#C9A84C', '#4B5563',
+];
+
+const THEME = {
+  wedding:    { accent: '#D4AF37', bg: '#FFFEF9', hint: 'Tulis pesan & nama Anda di sini…',   submit: 'Kirim Ucapan', ink: '#2C1810' },
+  graduation: { accent: '#1e3a8a', bg: '#FAFCFF', hint: 'Tulis ucapan wisuda Anda di sini…',  submit: 'Kirim Ucapan', ink: '#1e3a8a' },
+  corporate:  { accent: '#334155', bg: '#FAFAFA', hint: 'Tulis pesan korporat Anda di sini…', submit: 'Kirim Pesan',  ink: '#1f2937' },
+} as const;
+
+// ─── Component ────────────────────────────────────────────────────────────────
+
 export const EnhancedCanvas = forwardRef<EnhancedCanvasHandle, EnhancedCanvasProps>(
   ({
     theme = 'wedding',
@@ -87,255 +75,209 @@ export const EnhancedCanvas = forwardRef<EnhancedCanvasHandle, EnhancedCanvasPro
     onClear,
     className = '',
   }, ref) => {
-    const canvasRef           = useRef<HTMLCanvasElement>(null);
-    const ctxRef              = useRef<CanvasRenderingContext2D | null>(null);
-    const [canvasReady,       setCanvasReady]       = useState(false);
-    const isDrawingRef        = useRef(false);
-    const [history,           setHistory]           = useState<ImageData[]>([]);
-    const [tool,              setTool]              = useState<Tool>('pen');
-    const [brushSize,         setBrushSize]         = useState(5);
-    const [color,             setColor]             = useState<string>(THEME_CFG[theme].defaultColor);
-    const [canvasOpacity,     setCanvasOpacity]     = useState(1);
-    const [isSubmitting,      setIsSubmitting]      = useState(false);
-    const [showSuccess,       setShowSuccess]       = useState(false);
-    const [hasContent,        setHasContent]        = useState(false);
-    const [toolbarCollapsed,  setToolbarCollapsed]  = useState(false);
-    const [toolbarIdle,       setToolbarIdle]       = useState(false);
-    const [portalReady,       setPortalReady]       = useState(false);
-    const [toolbarX,          setToolbarX]          = useState(20);
-    const [toolbarY,          setToolbarY]          = useState(80);
-    const [isDraggingToolbar, setIsDraggingToolbar] = useState(false);
-    const toolbarIdleRef  = useRef<number | null>(null);
-    const toolbarDragRef  = useRef<{ startX: number; startY: number; startToolbarX: number; startToolbarY: number } | null>(null);
-    // ── FIX #1: Track last pointer position for Xibo pointer event coalescing ──
-    const lastPosRef      = useRef<{ x: number; y: number } | null>(null);
 
-    const cfg      = THEME_CFG[theme];
+    const cfg      = THEME[theme];
     const isKiosk  = variant === 'kiosk';
-    const isDisplay = variant === 'display';
+
+    // Refs
+    const canvasRef       = useRef<HTMLCanvasElement>(null);
+    const wrapperRef      = useRef<HTMLDivElement>(null);
+    const ctxRef          = useRef<CanvasRenderingContext2D | null>(null);
+    const isDrawingRef    = useRef(false);
+    const lastPosRef      = useRef<{ x: number; y: number } | null>(null);
+    const pointerActiveRef = useRef(false); // deduplicate touch vs pointer
+    const toolbarIdleTimer = useRef<number | null>(null);
+
+    // State
+    const [ready,            setReady]            = useState(false);
+    const [tool,             setTool]             = useState<Tool>('pen');
+    const [brushSize,        setBrushSize]        = useState(5);
+    const [color,            setColor]            = useState(cfg.ink);
+    const [history,          setHistory]          = useState<ImageData[]>([]);
+    const [hasContent,       setHasContent]       = useState(false);
+    const [submitting,       setSubmitting]       = useState(false);
+    const [showSuccess,      setShowSuccess]      = useState(false);
+    const [toolbarCollapsed, setToolbarCollapsed] = useState(false);
+    const [toolbarIdle,      setToolbarIdle]      = useState(false);
+    const [portalReady,      setPortalReady]      = useState(false);
+    // Toolbar position — default top-left, away from frame decorations
+    const [tbX, setTbX] = useState(20);
+    const [tbY, setTbY] = useState(80);
+    const [tbDragging, setTbDragging] = useState(false);
+    const tbDragRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
 
     useEffect(() => { setPortalReady(true); }, []);
-    useEffect(() => { setColor(THEME_CFG[theme].defaultColor); }, [theme]);
+    useEffect(() => { setColor(THEME[theme].ink); }, [theme]);
 
-    // ── Canvas init ──────────────────────────────────────────────────────────
-    const initCanvas = useCallback((canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, forceWindowDims?: boolean): boolean => {
-      let rect = canvas.getBoundingClientRect();
-
-      if ((rect.width === 0 || rect.height === 0) && !forceWindowDims) {
-        console.warn('[Canvas] getBoundingClientRect returned 0 dims, skipping init');
-        return false;
+    // ── GLOBAL touch-action injection ─────────────────────────────────────────
+    // XHB intercepts touch before canvas if any ancestor has default touch-action.
+    // Inject at document level as the safest guarantee.
+    useEffect(() => {
+      const id = 'xhb-touch-fix';
+      if (!document.getElementById(id)) {
+        const s = document.createElement('style');
+        s.id = id;
+        s.textContent = `
+          *, *::before, *::after { -ms-touch-action: none !important; touch-action: none !important; }
+          html, body, #root { overflow: hidden !important; width: 100% !important; height: 100% !important; }
+        `;
+        document.head.appendChild(s);
       }
-
-      if (forceWindowDims || rect.width === 0 || rect.height === 0) {
-        console.log('[Canvas] Using window dimensions fallback');
-        rect = {
-          width: window.innerWidth, height: window.innerHeight,
-          top: 0, left: 0, bottom: window.innerHeight, right: window.innerWidth,
-          x: 0, y: 0, toJSON: () => ({}),
-        };
-      }
-
-      const dpr = window.devicePixelRatio || 1;
-      canvas.width  = Math.round(rect.width  * dpr);
-      canvas.height = Math.round(rect.height * dpr);
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.scale(dpr, dpr);
-      canvas.style.width  = rect.width  + 'px';
-      canvas.style.height = rect.height + 'px';
-
-      if (isKiosk) {
-        ctx.clearRect(0, 0, rect.width, rect.height);
-      } else {
-        ctx.fillStyle = cfg.canvasBg;
-        ctx.fillRect(0, 0, rect.width, rect.height);
-      }
-      ctx.lineCap  = 'round';
-      ctx.lineJoin = 'round';
-      console.log('[Canvas] Initialized: ' + rect.width + 'x' + rect.height + ' @ ' + dpr + 'x DPR');
-      return true;
-    }, [cfg.canvasBg, isKiosk]);
-
-    const refreshToolbarIdle = useCallback(() => {
-      setToolbarIdle(false);
-      if (toolbarIdleRef.current) window.clearTimeout(toolbarIdleRef.current);
-      toolbarIdleRef.current = window.setTimeout(() => setToolbarIdle(true), 8000);
+      return () => document.getElementById(id)?.remove();
     }, []);
 
-    const signalActivity = useCallback(() => {
-      onUserActivity?.();
-      refreshToolbarIdle();
-    }, [onUserActivity, refreshToolbarIdle]);
+    // ── Canvas init ────────────────────────────────────────────────────────────
+    // Use offsetWidth/offsetHeight — XHB often returns 0 from getBoundingClientRect
+    const initCanvas = useCallback(() => {
+      const canvas  = canvasRef.current;
+      const wrapper = wrapperRef.current;
+      if (!canvas || !wrapper) return false;
 
-    useEffect(() => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
+      // XHB fix: prefer offsetWidth over getBoundingClientRect
+      let w = wrapper.offsetWidth;
+      let h = wrapper.offsetHeight;
+
+      // Last resort fallback
+      if (!w || !h) {
+        w = window.innerWidth;
+        h = window.innerHeight;
+        console.warn('[Canvas] offsetWidth=0, using window dims:', w, h);
+      }
+
+      const dpr = Math.min(window.devicePixelRatio || 1, 2); // cap at 2x for perf
+      canvas.width  = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+      canvas.style.width  = w + 'px';
+      canvas.style.height = h + 'px';
+
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      if (!ctx) { console.error('[Canvas] Failed to get 2D context'); return; }
+      if (!ctx) { console.error('[Canvas] No 2D context'); return false; }
       ctxRef.current = ctx;
 
-      if (initCanvas(canvas, ctx)) { setCanvasReady(true); refreshToolbarIdle(); return; }
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.scale(dpr, dpr);
+      ctx.lineCap  = 'round';
+      ctx.lineJoin = 'round';
 
-      let active = true;
-      const ro = new ResizeObserver(() => {
-        if (!active) return;
-        if (initCanvas(canvas, ctx)) {
-          setCanvasReady(true); setHistory([]); refreshToolbarIdle();
-          active = false; ro.disconnect();
-        }
-      });
-      ro.observe(canvas);
+      if (isKiosk) {
+        ctx.clearRect(0, 0, w, h);
+      } else {
+        ctx.fillStyle = cfg.bg;
+        ctx.fillRect(0, 0, w, h);
+      }
 
-      const tid = setTimeout(() => {
-        if (active) {
-          if (initCanvas(canvas, ctx, true)) {
-            setCanvasReady(true); setHistory([]); refreshToolbarIdle();
-            active = false; ro.disconnect();
-          }
-        }
-      }, 500);
-
-      return () => { active = false; clearTimeout(tid); ro.disconnect(); };
-    }, [theme, initCanvas, refreshToolbarIdle]);
+      console.log('[Canvas] Init OK:', w + 'x' + h, '@ DPR', dpr);
+      return true;
+    }, [cfg.bg, isKiosk]);
 
     useEffect(() => {
-      return () => { if (toolbarIdleRef.current) window.clearTimeout(toolbarIdleRef.current); };
-    }, []);
+      if (initCanvas()) { setReady(true); return; }
 
-    // ── Tool settings ────────────────────────────────────────────────────────
-    const applyToolSettings = useCallback(() => {
+      // Retry with ResizeObserver (XHB sometimes needs a frame to lay out)
+      let alive = true;
+      const ro = new ResizeObserver(() => {
+        if (!alive) return;
+        if (initCanvas()) { setReady(true); alive = false; ro.disconnect(); }
+      });
+      if (wrapperRef.current) ro.observe(wrapperRef.current);
+
+      // Hard timeout fallback — 800ms after mount
+      const tid = setTimeout(() => {
+        if (!alive) return;
+        if (initCanvas()) { setReady(true); }
+        alive = false;
+        ro.disconnect();
+      }, 800);
+
+      return () => { alive = false; clearTimeout(tid); ro.disconnect(); };
+    }, [initCanvas]);
+
+    // ── Tool application ───────────────────────────────────────────────────────
+    const applyTool = useCallback(() => {
       const ctx = ctxRef.current;
       if (!ctx) return;
       if (tool === 'eraser') {
-        if (isKiosk) {
-          ctx.globalCompositeOperation = 'destination-out';
-          ctx.strokeStyle = 'rgba(0,0,0,1)';
-        } else {
-          ctx.globalCompositeOperation = 'source-over';
-          ctx.strokeStyle = cfg.canvasBg;
-        }
-        ctx.lineWidth = brushSize * 3;
+        ctx.globalCompositeOperation = isKiosk ? 'destination-out' : 'source-over';
+        ctx.strokeStyle = isKiosk ? 'rgba(0,0,0,1)' : cfg.bg;
+        ctx.lineWidth   = brushSize * 3;
       } else {
         ctx.globalCompositeOperation = 'source-over';
         ctx.strokeStyle = color;
         ctx.lineWidth   = brushSize;
       }
-    }, [tool, color, brushSize, cfg.canvasBg, isKiosk]);
+    }, [tool, color, brushSize, cfg.bg, isKiosk]);
+    const applyToolRef = useRef(applyTool);
+    useEffect(() => { applyToolRef.current = applyTool; }, [applyTool]);
 
-    const applyToolSettingsRef = useRef(applyToolSettings);
-    useEffect(() => { applyToolSettingsRef.current = applyToolSettings; }, [applyToolSettings]);
-
-    // ── FIX #2: Native event listeners – the core Xibo fix ──────────────────
-    //
-    // ROOT CAUSE kenapa drawing tidak bekerja di Xibo:
-    //
-    // 1. touch-action CSS — Xibo/WebView intercept touch sebelum sampai ke canvas
-    //    jika touch-action tidak di-set ke 'none' di SEMUA ancestor. Solusi:
-    //    inject style global yang memaksa touch-action: none di html/body/root.
-    //
-    // 2. Pointer events vs Touch events — Xibo lama (Chromium < 70) hanya
-    //    trigger TouchEvent, tidak PointerEvent. Solusi: daftarkan keduanya,
-    //    tapi jika ada pointerdown, batalkan touchstart handler agar tidak
-    //    double-fire. Deteksi lewat `window._xiboPointerActive`.
-    //
-    // 3. passive: false wajib untuk e.preventDefault() — tanpa ini browser
-    //    modern memblock preventDefault() di touchmove dan scroll terjadi.
-    //
-    useEffect(() => {
-      // ── GLOBAL STYLE INJECTION ──────────────────────────────────────────
-      // Paksa touch-action: none di semua level agar Xibo tidak intercept
-      const styleEl = document.createElement('style');
-      styleEl.id = 'xibo-canvas-fix';
-      styleEl.textContent = `
-        html, body, #root { touch-action: none !important; overflow: hidden !important; }
-        canvas { touch-action: none !important; }
-      `;
-      if (!document.getElementById('xibo-canvas-fix')) {
-        document.head.appendChild(styleEl);
-      }
-      return () => { document.getElementById('xibo-canvas-fix')?.remove(); };
+    // ── Toolbar idle ───────────────────────────────────────────────────────────
+    const resetToolbarIdle = useCallback(() => {
+      setToolbarIdle(false);
+      if (toolbarIdleTimer.current) clearTimeout(toolbarIdleTimer.current);
+      toolbarIdleTimer.current = window.setTimeout(() => setToolbarIdle(true), 8000);
     }, []);
+    useEffect(() => () => { if (toolbarIdleTimer.current) clearTimeout(toolbarIdleTimer.current); }, []);
 
+    const signalActivity = useCallback(() => {
+      onUserActivity?.();
+      resetToolbarIdle();
+    }, [onUserActivity, resetToolbarIdle]);
+
+    // ── Position helper ───────────────────────────────────────────────────────
+    // XHB sometimes has coordinate offset when transforms exist on ancestors.
+    // We read canvas.getBoundingClientRect only for coordinate mapping (not sizing).
+    const getPos = (e: Event, canvas: HTMLCanvasElement): { x: number; y: number } | null => {
+      // Use offsetLeft/offsetTop for XHB coordinate offset fix
+      const rect = canvas.getBoundingClientRect();
+
+      if ('touches' in e) {
+        const te = e as TouchEvent;
+        const t  = te.touches[0] ?? te.changedTouches?.[0];
+        if (!t) return null;
+        return { x: t.clientX - rect.left, y: t.clientY - rect.top };
+      }
+      const pe = e as PointerEvent | MouseEvent;
+      return { x: pe.clientX - rect.left, y: pe.clientY - rect.top };
+    };
+
+    // ── Native event listeners ────────────────────────────────────────────────
     useEffect(() => {
       const canvas = canvasRef.current;
-      if (!canvas) return;
+      if (!canvas || !ready) return;
 
-      // ── FIX #3: canvas style wajib touch-action: none ──────────────────
-      canvas.style.touchAction = 'none';
-      canvas.style.userSelect  = 'none';
+      // Explicitly set on the element too (belt & suspenders)
+      canvas.style.touchAction    = 'none';
+      canvas.style.userSelect     = 'none';
       (canvas.style as any).webkitUserSelect = 'none';
-      (canvas.style as any).msUserSelect = 'none';
-
-      // ── Helper: ambil koordinat dari semua event type ───────────────────
-      const getPosFn = (e: Event): { x: number; y: number } | null => {
-        const rect = canvas.getBoundingClientRect();
-        // TouchEvent
-        if ('touches' in e) {
-          const te = e as TouchEvent;
-          const touch = te.touches[0] ?? te.changedTouches?.[0];
-          if (!touch) return null;
-          return { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
-        }
-        // PointerEvent or MouseEvent
-        const pe = e as PointerEvent | MouseEvent;
-        // ── FIX #4: Xibo sometimes sends pointerType='touch' but with button=0
-        // Filter out hover-only pointermove (no button pressed)
-        if ('pointerType' in pe && pe.type === 'pointermove' && !isDrawingRef.current) return null;
-        return { x: pe.clientX - rect.left, y: pe.clientY - rect.top };
-      };
-
-      // Deteksi apakah browser support PointerEvents dengan benar
-      // Xibo berbasis Chromium lama kadang punya pointer events tapi tidak reliable
-      let usePointer = false;
-      let useTouch   = false;
-      try {
-        // Test pointer event support
-        if (typeof PointerEvent !== 'undefined' && window.navigator.pointerEnabled !== false) {
-          usePointer = true;
-        }
-        if (typeof TouchEvent !== 'undefined') {
-          useTouch = true;
-        }
-      } catch { /* ignore */ }
-
-      console.log('[Canvas] Event strategy: pointer=' + usePointer + ' touch=' + useTouch);
+      (canvas.style as any).msTouchAction   = 'none';
 
       const onStart = (e: Event) => {
         if (e.cancelable) e.preventDefault();
-        e.stopPropagation();
-        if (!ctxRef.current || !canvasReady || isEnded) {
-          console.log('[Canvas] onStart blocked: ready=' + canvasReady + ' ended=' + isEnded);
-          return;
-        }
-        const pos = getPosFn(e);
-        if (!pos) { console.warn('[Canvas] onStart: no pos'); return; }
+        if (!ctxRef.current || isEnded) return;
+        const pos = getPos(e, canvas);
+        if (!pos) return;
 
-        console.log('[Canvas] Draw START at', pos.x.toFixed(0), pos.y.toFixed(0));
-        applyToolSettingsRef.current();
-        const imageData = ctxRef.current.getImageData(0, 0, canvas.width, canvas.height);
-        setHistory(prev => [...prev.slice(-19), imageData]);
+        const snap = ctxRef.current.getImageData(0, 0, canvas.width, canvas.height);
+        setHistory(prev => [...prev.slice(-19), snap]);
+        applyToolRef.current();
         ctxRef.current.beginPath();
         ctxRef.current.moveTo(pos.x, pos.y);
-        lastPosRef.current = pos;
         isDrawingRef.current = true;
+        lastPosRef.current   = pos;
         if (!hasContent) { setHasContent(true); onDrawStart?.(); }
         signalActivity();
+        console.log('[Canvas] START', pos.x.toFixed(0), pos.y.toFixed(0));
       };
 
       const onMove = (e: Event) => {
         if (e.cancelable) e.preventDefault();
-        e.stopPropagation();
         if (!isDrawingRef.current || !ctxRef.current) return;
-        const pos = getPosFn(e);
+        const pos = getPos(e, canvas);
         if (!pos) return;
-
-        // ── FIX #5: Xibo kadang kirim duplicate events di koordinat sama
-        // Skip jika posisi identik (toleransi 0.5px)
+        // Skip identical coords (XHB duplicate events)
         if (lastPosRef.current) {
-          const dx = Math.abs(pos.x - lastPosRef.current.x);
-          const dy = Math.abs(pos.y - lastPosRef.current.y);
-          if (dx < 0.5 && dy < 0.5) return;
+          if (Math.abs(pos.x - lastPosRef.current.x) < 0.5 &&
+              Math.abs(pos.y - lastPosRef.current.y) < 0.5) return;
         }
-
         ctxRef.current.lineTo(pos.x, pos.y);
         ctxRef.current.stroke();
         lastPosRef.current = pos;
@@ -344,138 +286,79 @@ export const EnhancedCanvas = forwardRef<EnhancedCanvasHandle, EnhancedCanvasPro
 
       const onEnd = (e: Event) => {
         if (e.cancelable) e.preventDefault();
-        e.stopPropagation();
         ctxRef.current?.closePath();
         isDrawingRef.current = false;
         lastPosRef.current   = null;
+        setTimeout(() => { pointerActiveRef.current = false; }, 50);
       };
 
-      // ── Daftar listeners ─────────────────────────────────────────────────
-      // Strategi: daftarkan SEMUA jenis, tapi track mana yang pertama fire
-      // agar tidak double-draw.
-
-      // ── FIX #6: De-duplicate touch vs pointer events ─────────────────────
-      // Xibo lama: hanya touch events
-      // Xibo baru: pointer events (tapi kadang juga kirim touch sebagai fallback)
-      // Solusi: track apakah pointer sudah handle event ini, kalau iya skip touch.
-      let pointerHandling = false;
-
-      const wrappedPointerStart = (e: Event) => {
-        pointerHandling = true;
+      // Pointer capture — keeps pointermove firing even when finger leaves canvas
+      const onPointerDown = (e: Event) => {
+        pointerActiveRef.current = true;
+        try { canvas.setPointerCapture((e as PointerEvent).pointerId); } catch {}
         onStart(e);
       };
-      const wrappedPointerMove = (e: Event) => { onMove(e); };
-      const wrappedPointerEnd = (e: Event) => {
-        setTimeout(() => { pointerHandling = false; }, 50);
-        onEnd(e);
-      };
 
-      const wrappedTouchStart = (e: Event) => { if (!pointerHandling) onStart(e); };
-      const wrappedTouchMove  = (e: Event) => { if (!pointerHandling) onMove(e); };
-      const wrappedTouchEnd   = (e: Event) => { if (!pointerHandling) onEnd(e); };
+      // Touch (XHB older / Android WebView)
+      const onTouchStart = (e: Event) => { if (!pointerActiveRef.current) onStart(e); };
+      const onTouchMove  = (e: Event) => { if (!pointerActiveRef.current) onMove(e); };
+      const onTouchEnd   = (e: Event) => { if (!pointerActiveRef.current) onEnd(e); };
 
-      const opts = { passive: false } as AddEventListenerOptions;
+      const opts: AddEventListenerOptions = { passive: false };
 
-      // Touch events (Xibo lama / Android WebView)
-      canvas.addEventListener('touchstart',  wrappedTouchStart, opts);
-      canvas.addEventListener('touchmove',   wrappedTouchMove,  opts);
-      canvas.addEventListener('touchend',    wrappedTouchEnd,   opts);
-      canvas.addEventListener('touchcancel', wrappedTouchEnd,   opts);
+      canvas.addEventListener('touchstart',   onTouchStart, opts);
+      canvas.addEventListener('touchmove',    onTouchMove,  opts);
+      canvas.addEventListener('touchend',     onTouchEnd,   opts);
+      canvas.addEventListener('touchcancel',  onTouchEnd,   opts);
 
-      // Pointer events (Xibo baru / modern WebView)
-      canvas.addEventListener('pointerdown',  wrappedPointerStart, opts);
-      canvas.addEventListener('pointermove',  wrappedPointerMove,  opts);
-      canvas.addEventListener('pointerup',    wrappedPointerEnd,   opts);
-      canvas.addEventListener('pointerleave', wrappedPointerEnd,   opts);
-      canvas.addEventListener('pointercancel', wrappedPointerEnd,  opts);
+      canvas.addEventListener('pointerdown',  onPointerDown,  opts);
+      canvas.addEventListener('pointermove',  onMove as EventListener, opts);
+      canvas.addEventListener('pointerup',    onEnd  as EventListener, opts);
+      canvas.addEventListener('pointerleave', onEnd  as EventListener, opts);
+      canvas.addEventListener('pointercancel',onEnd  as EventListener, opts);
 
-      // Mouse events (fallback terakhir)
+      // Mouse fallback
       canvas.addEventListener('mousedown',  onStart as EventListener);
       canvas.addEventListener('mousemove',  onMove  as EventListener);
       canvas.addEventListener('mouseup',    onEnd   as EventListener);
       canvas.addEventListener('mouseleave', onEnd   as EventListener);
 
-      // ── FIX #7: setPointerCapture agar pointermove tidak drop saat jari
-      // keluar batas canvas di Xibo ────────────────────────────────────────
-      const capturePointer = (e: Event) => {
-        try {
-          const pe = e as PointerEvent;
-          if (pe.pointerId !== undefined) {
-            canvas.setPointerCapture(pe.pointerId);
-          }
-        } catch { /* not all Xibo versions support this */ }
-      };
-      canvas.addEventListener('pointerdown', capturePointer);
-
-      console.log('[Canvas] All native listeners attached');
-
       return () => {
-        canvas.removeEventListener('touchstart',   wrappedTouchStart);
-        canvas.removeEventListener('touchmove',    wrappedTouchMove);
-        canvas.removeEventListener('touchend',     wrappedTouchEnd);
-        canvas.removeEventListener('touchcancel',  wrappedTouchEnd);
-        canvas.removeEventListener('pointerdown',  wrappedPointerStart);
-        canvas.removeEventListener('pointermove',  wrappedPointerMove);
-        canvas.removeEventListener('pointerup',    wrappedPointerEnd);
-        canvas.removeEventListener('pointerleave', wrappedPointerEnd);
-        canvas.removeEventListener('pointercancel', wrappedPointerEnd);
+        canvas.removeEventListener('touchstart',   onTouchStart);
+        canvas.removeEventListener('touchmove',    onTouchMove);
+        canvas.removeEventListener('touchend',     onTouchEnd);
+        canvas.removeEventListener('touchcancel',  onTouchEnd);
+        canvas.removeEventListener('pointerdown',  onPointerDown);
+        canvas.removeEventListener('pointermove',  onMove as EventListener);
+        canvas.removeEventListener('pointerup',    onEnd  as EventListener);
+        canvas.removeEventListener('pointerleave', onEnd  as EventListener);
+        canvas.removeEventListener('pointercancel',onEnd  as EventListener);
         canvas.removeEventListener('mousedown',    onStart as EventListener);
         canvas.removeEventListener('mousemove',    onMove  as EventListener);
         canvas.removeEventListener('mouseup',      onEnd   as EventListener);
         canvas.removeEventListener('mouseleave',   onEnd   as EventListener);
-        canvas.removeEventListener('pointerdown',  capturePointer);
-        console.log('[Canvas] All native listeners removed');
       };
-    }, [canvasReady, hasContent, isEnded, onDrawStart, signalActivity]);
+    }, [ready, isEnded, hasContent, onDrawStart, signalActivity]);
 
-    // ── Toolbar drag ─────────────────────────────────────────────────────────
-    const handleToolbarMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-      if ((e.target as HTMLElement).closest('button')) return;
-      if ((e.target as HTMLElement).closest('input')) return;
-      toolbarDragRef.current = {
-        startX: e.clientX, startY: e.clientY,
-        startToolbarX: toolbarX, startToolbarY: toolbarY,
-      };
-      setIsDraggingToolbar(true);
-    }, [toolbarX, toolbarY]);
-
-    useEffect(() => {
-      if (!isDraggingToolbar || !toolbarDragRef.current) return;
-      const onMM = (e: MouseEvent) => {
-        if (!toolbarDragRef.current) return;
-        const dx = e.clientX - toolbarDragRef.current.startX;
-        const dy = e.clientY - toolbarDragRef.current.startY;
-        setToolbarX(Math.max(0, Math.min(toolbarDragRef.current.startToolbarX + dx, window.innerWidth  - 260)));
-        setToolbarY(Math.max(0, Math.min(toolbarDragRef.current.startToolbarY + dy, window.innerHeight - 100)));
-      };
-      const onMU = () => { setIsDraggingToolbar(false); toolbarDragRef.current = null; };
-      window.addEventListener('mousemove', onMM);
-      window.addEventListener('mouseup',   onMU);
-      return () => { window.removeEventListener('mousemove', onMM); window.removeEventListener('mouseup', onMU); };
-    }, [isDraggingToolbar]);
-
-    // ── Canvas operations ────────────────────────────────────────────────────
+    // ── Canvas ops ─────────────────────────────────────────────────────────────
     const clearCanvas = useCallback(() => {
-      signalActivity();
       const canvas = canvasRef.current;
       const ctx    = ctxRef.current;
-      if (!ctx || !canvas) return;
-      const rect = canvas.getBoundingClientRect();
-      if (isKiosk) {
-        ctx.clearRect(0, 0, rect.width, rect.height);
-      } else {
-        ctx.fillStyle = cfg.canvasBg;
-        ctx.fillRect(0, 0, rect.width, rect.height);
-      }
+      if (!canvas || !ctx) return;
+      const w = canvas.width / (window.devicePixelRatio || 1);
+      const h = canvas.height / (window.devicePixelRatio || 1);
+      if (isKiosk) { ctx.clearRect(0, 0, w, h); }
+      else         { ctx.fillStyle = cfg.bg; ctx.fillRect(0, 0, w, h); }
       setHistory([]);
       setHasContent(false);
       onClear?.();
-    }, [cfg.canvasBg, onClear, signalActivity, isKiosk]);
+      signalActivity();
+    }, [cfg.bg, isKiosk, onClear, signalActivity]);
 
     const undo = useCallback(() => {
       const canvas = canvasRef.current;
       const ctx    = ctxRef.current;
-      if (!ctx || !canvas || history.length === 0) return;
+      if (!canvas || !ctx || history.length === 0) return;
       ctx.putImageData(history[history.length - 1], 0, 0);
       setHistory(prev => prev.slice(0, -1));
       if (history.length <= 1) { setHasContent(false); onClear?.(); }
@@ -484,57 +367,49 @@ export const EnhancedCanvas = forwardRef<EnhancedCanvasHandle, EnhancedCanvasPro
     const isCanvasEmpty = useCallback((): boolean => {
       const canvas = canvasRef.current;
       const ctx    = ctxRef.current;
-      if (!canvas || !ctx || !canvasReady) return true;
-      if (canvas.width === 0 || canvas.height === 0) return true;
-      const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+      if (!canvas || !ctx || !ready) return true;
+      const d = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
       if (isKiosk) {
-        for (let i = 3; i < data.length; i += 4) { if (data[i] > 5) return false; }
+        for (let i = 3; i < d.length; i += 4) if (d[i] > 5) return false;
         return true;
       }
-      const tmpC = document.createElement('canvas');
-      tmpC.width = 1; tmpC.height = 1;
-      const tmpCtx = tmpC.getContext('2d')!;
-      tmpCtx.fillStyle = cfg.canvasBg;
-      tmpCtx.fillRect(0, 0, 1, 1);
-      const [bgR, bgG, bgB] = tmpCtx.getImageData(0, 0, 1, 1).data;
-      for (let i = 0; i < data.length; i += 4) {
-        if (Math.abs(data[i]-bgR)>5 || Math.abs(data[i+1]-bgG)>5 || Math.abs(data[i+2]-bgB)>5) return false;
-      }
+      // non-kiosk: compare against bg colour
+      const tmp = document.createElement('canvas');
+      tmp.width = tmp.height = 1;
+      const tc = tmp.getContext('2d')!;
+      tc.fillStyle = cfg.bg; tc.fillRect(0, 0, 1, 1);
+      const [r, g, b] = tc.getImageData(0, 0, 1, 1).data;
+      for (let i = 0; i < d.length; i += 4)
+        if (Math.abs(d[i]-r)>5 || Math.abs(d[i+1]-g)>5 || Math.abs(d[i+2]-b)>5) return false;
       return true;
-    }, [canvasReady, cfg.canvasBg, isKiosk]);
+    }, [ready, cfg.bg, isKiosk]);
 
-    const getCompositeImageData = useCallback(async (): Promise<string> => {
+    const getComposite = useCallback(async (): Promise<string> => {
       const canvas = canvasRef.current;
       if (!canvas) return '';
       if (!frameUrl) return canvas.toDataURL('image/png');
-      const composite = document.createElement('canvas');
-      composite.width = canvas.width; composite.height = canvas.height;
-      const ctx = composite.getContext('2d')!;
+      const c = document.createElement('canvas');
+      c.width = canvas.width; c.height = canvas.height;
+      const ctx = c.getContext('2d')!;
       ctx.drawImage(canvas, 0, 0);
       try {
-        const frameImg = await new Promise<HTMLImageElement>((res, rej) => {
-          const img = new Image(); img.crossOrigin = 'anonymous';
-          img.onload = () => res(img); img.onerror = rej; img.src = frameUrl;
+        const img = await new Promise<HTMLImageElement>((res, rej) => {
+          const i = new Image(); i.crossOrigin = 'anonymous';
+          i.onload = () => res(i); i.onerror = rej; i.src = frameUrl;
         });
-        ctx.drawImage(frameImg, 0, 0, composite.width, composite.height);
-      } catch { /* frame failed, continue */ }
-      return composite.toDataURL('image/png');
+        ctx.drawImage(img, 0, 0, c.width, c.height);
+      } catch {}
+      return c.toDataURL('image/png');
     }, [frameUrl]);
 
     const handleSubmit = useCallback(async () => {
-      if (isSubmitting || isEnded) return;
-      if (isCanvasEmpty()) return;
-      setIsSubmitting(true);
-      const imageData = await getCompositeImageData();
-      onSubmit(imageData);
+      if (submitting || isEnded || isCanvasEmpty()) return;
+      setSubmitting(true);
+      const data = await getComposite();
+      onSubmit(data);
       setShowSuccess(true);
-      setCanvasOpacity(0);
-      await new Promise(r => setTimeout(r, 500));
-      clearCanvas();
-      setCanvasOpacity(1);
-      setTimeout(() => setShowSuccess(false), 2000);
-      setIsSubmitting(false);
-    }, [isSubmitting, isEnded, isCanvasEmpty, getCompositeImageData, onSubmit, clearCanvas]);
+      setTimeout(async () => { clearCanvas(); setShowSuccess(false); setSubmitting(false); }, 2500);
+    }, [submitting, isEnded, isCanvasEmpty, getComposite, onSubmit, clearCanvas]);
 
     useImperativeHandle(ref, () => ({
       reset: clearCanvas,
@@ -542,101 +417,100 @@ export const EnhancedCanvas = forwardRef<EnhancedCanvasHandle, EnhancedCanvasPro
       getImageData: () => canvasRef.current?.toDataURL('image/png') ?? '',
     }), [clearCanvas, isCanvasEmpty]);
 
-    // ── Toolbar panel ────────────────────────────────────────────────────────
-    const toolbarPanel = !isDisplay ? (
+    // ── Toolbar drag ──────────────────────────────────────────────────────────
+    const onTbMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+      if ((e.target as HTMLElement).closest('button,input,label')) return;
+      tbDragRef.current = { sx: e.clientX, sy: e.clientY, ox: tbX, oy: tbY };
+      setTbDragging(true);
+    }, [tbX, tbY]);
+
+    useEffect(() => {
+      if (!tbDragging || !tbDragRef.current) return;
+      const mm = (e: MouseEvent) => {
+        if (!tbDragRef.current) return;
+        setTbX(Math.max(0, Math.min(tbDragRef.current.ox + e.clientX - tbDragRef.current.sx, window.innerWidth  - 260)));
+        setTbY(Math.max(0, Math.min(tbDragRef.current.oy + e.clientY - tbDragRef.current.sy, window.innerHeight - 100)));
+      };
+      const mu = () => { setTbDragging(false); tbDragRef.current = null; };
+      window.addEventListener('mousemove', mm);
+      window.addEventListener('mouseup',   mu);
+      return () => { window.removeEventListener('mousemove', mm); window.removeEventListener('mouseup', mu); };
+    }, [tbDragging]);
+
+    // ── Toolbar UI ────────────────────────────────────────────────────────────
+    const btnBase: React.CSSProperties = {
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+      border: 'none', cursor: 'pointer', touchAction: 'none',
+    };
+
+    const toolbar = (
       <div
-        onMouseDown={handleToolbarMouseDown}
+        onMouseDown={onTbMouseDown}
         style={{
-          position: 'fixed',
-          top:      toolbarY,
-          left:     toolbarX,
-          zIndex:   10050,
-          pointerEvents: 'auto',
-          // ── FIX #8: Toolbar juga butuh touch-action: none ──────────────
-          touchAction: 'none',
-          opacity:  toolbarIdle ? 0.6 : 1,
-          transition: isDraggingToolbar ? 'none' : 'opacity 0.4s',
-          width:    240,
-          maxWidth: 'calc(100vw - 32px)',
-          cursor:   isDraggingToolbar ? 'grabbing' : 'grab',
+          position:   'fixed',
+          top:        tbY,
+          left:       tbX,
+          zIndex:     9999,
+          width:      248,
+          touchAction:'none',
+          opacity:    toolbarIdle ? 0.55 : 1,
+          transition: tbDragging ? 'none' : 'opacity 0.4s',
+          cursor:     tbDragging ? 'grabbing' : 'grab',
           userSelect: 'none',
         }}
       >
         {toolbarCollapsed ? (
-          <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
-            <button
-              type="button"
-              onClick={() => setToolbarCollapsed(false)}
-              style={{
-                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                width: 48, height: 48, borderRadius: 14,
-                background: 'rgba(20,12,0,0.92)', border: '1px solid rgba(255,255,255,0.2)',
-                color: '#fff', cursor: 'pointer', fontSize: 15,
-                // Penting: tombol juga butuh pointer events aktif
-                touchAction: 'none',
-              }}
-              aria-label="Buka toolbar"
-            >
-              <ChevronRight style={{ width: 18, height: 18 }} />
-            </button>
-          </div>
-        ) : (
-          <div
+          <button
+            type="button"
+            onClick={() => setToolbarCollapsed(false)}
             style={{
-              display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 10,
-              padding: '12px', borderRadius: 18,
-              background: 'rgba(20,12,0,0.92)', border: '1px solid rgba(255,255,255,0.18)',
+              ...btnBase, width: 48, height: 48, borderRadius: 14,
+              background: 'rgba(15,10,0,0.9)', color: '#fff',
+              border: '1px solid rgba(255,255,255,0.2)',
             }}
           >
-            {/* Color swatches */}
-            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+            <ChevronRight style={{ width: 18, height: 18 }} />
+          </button>
+        ) : (
+          <div style={{
+            display: 'flex', flexDirection: 'column', gap: 10, padding: 12,
+            borderRadius: 18, background: 'rgba(15,10,0,0.92)',
+            border: '1px solid rgba(255,255,255,0.15)',
+          }}>
+            {/* Colors */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
               {COLORS.map(c => (
-                <button
-                  key={c} type="button"
+                <button key={c} type="button"
                   onClick={() => { setColor(c); setTool('pen'); signalActivity(); }}
-                  aria-label={`Warna ${c}`}
                   style={{
-                    width: 30, height: 30, borderRadius: '50%', background: c,
-                    border: color === c && tool === 'pen' ? '2px solid #fff' : '1.5px solid rgba(255,255,255,0.2)',
-                    boxShadow: color === c && tool === 'pen' ? `0 0 0 1px ${c}` : 'none',
-                    cursor: 'pointer', flexShrink: 0, touchAction: 'none',
+                    ...btnBase, width: 30, height: 30, borderRadius: '50%', background: c,
+                    border: color === c && tool === 'pen' ? '2.5px solid #fff' : '1.5px solid rgba(255,255,255,0.2)',
+                    boxShadow: color === c && tool === 'pen' ? `0 0 0 1.5px ${c}` : 'none',
                   }}
                 />
               ))}
-              <label
-                title="Warna custom"
-                style={{
-                  position: 'relative', display: 'inline-flex',
-                  width: 30, height: 30, borderRadius: '50%', background: color,
-                  border: '1.5px solid rgba(255,255,255,0.25)', cursor: 'pointer',
-                  overflow: 'hidden', flexShrink: 0,
-                }}
-              >
-                <input
-                  type="color" value={color}
+              <label style={{
+                position: 'relative', display: 'inline-flex',
+                width: 30, height: 30, borderRadius: '50%', background: color,
+                border: '1.5px solid rgba(255,255,255,0.25)', cursor: 'pointer',
+                overflow: 'hidden', touchAction: 'none',
+              }}>
+                <input type="color" value={color}
                   onChange={e => { setColor(e.target.value); setTool('pen'); signalActivity(); }}
-                  style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%' }}
+                  style={{ position: 'absolute', inset: 0, opacity: 0, width: '100%', height: '100%', cursor: 'pointer' }}
                 />
               </label>
             </div>
 
-            {/* Pen / Eraser toggle */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'center' }}>
-              {[
-                { t: 'pen'    as Tool, Icon: Pen,    label: 'Pena'        },
-                { t: 'eraser' as Tool, Icon: Eraser, label: 'Penghapus'   },
-              ].map(({ t, Icon, label }) => (
-                <button
-                  key={t} type="button"
-                  onClick={() => { setTool(t); signalActivity(); }}
-                  aria-label={label}
+            {/* Pen / Eraser */}
+            <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
+              {([['pen', Pen, 'Pena'], ['eraser', Eraser, 'Penghapus']] as const).map(([t, Icon, label]) => (
+                <button key={t} type="button" onClick={() => { setTool(t); signalActivity(); }} aria-label={label}
                   style={{
-                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                    width: 38, height: 38, borderRadius: 12,
+                    ...btnBase, width: 38, height: 38, borderRadius: 12,
                     background: tool === t ? '#fff' : 'rgba(255,255,255,0.12)',
-                    color:      tool === t ? '#111827' : 'rgba(255,255,255,0.8)',
-                    border: 'none', cursor: 'pointer', touchAction: 'none',
-                    boxShadow: tool === t ? '0 3px 12px rgba(0,0,0,0.2)' : 'none',
+                    color:      tool === t ? '#111' : 'rgba(255,255,255,0.8)',
+                    boxShadow:  tool === t ? '0 2px 8px rgba(0,0,0,0.25)' : 'none',
                   }}
                 >
                   <Icon style={{ width: 16, height: 16 }} />
@@ -645,227 +519,154 @@ export const EnhancedCanvas = forwardRef<EnhancedCanvasHandle, EnhancedCanvasPro
             </div>
 
             {/* Brush sizes */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'center' }}>
+            <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
               {SIZES.map(s => (
-                <button
-                  key={s.value} type="button"
-                  onClick={() => { setBrushSize(s.value); signalActivity(); }}
-                  aria-label={`Ukuran ${s.label}`}
+                <button key={s.value} type="button" onClick={() => { setBrushSize(s.value); signalActivity(); }}
+                  aria-label={'Ukuran ' + s.label}
                   style={{
-                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                    width: 34, height: 34, borderRadius: '50%',
+                    ...btnBase, width: 34, height: 34, borderRadius: '50%',
                     background: brushSize === s.value ? '#fff' : 'rgba(255,255,255,0.12)',
                     border: brushSize === s.value ? 'none' : '1.5px solid rgba(255,255,255,0.2)',
-                    cursor: 'pointer', touchAction: 'none',
                   }}
                 >
                   <span style={{
                     display: 'block', borderRadius: '50%',
                     width:  Math.min(s.value * 1.4 + 4, 18),
                     height: Math.min(s.value * 1.4 + 4, 18),
-                    background: brushSize === s.value ? '#111827' : '#fff',
+                    background: brushSize === s.value ? '#111' : '#fff',
                   }} />
                 </button>
               ))}
             </div>
 
-            {/* Undo / Clear / Submit */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'center' }}>
-                {[
-                  { fn: undo,       Icon: Undo2,  label: 'Undo',       disabled: history.length === 0 },
-                  { fn: clearCanvas, Icon: Trash2, label: 'Hapus semua', disabled: false },
-                ].map(({ fn, Icon, label, disabled }) => (
-                  <button
-                    key={label} type="button" onClick={fn} disabled={disabled} aria-label={label}
-                    style={{
-                      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                      width: 38, height: 38, borderRadius: 12,
-                      background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.15)',
-                      color: 'rgba(255,255,255,0.85)',
-                      cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.35 : 1,
-                      touchAction: 'none',
-                    }}
-                  >
-                    <Icon style={{ width: 16, height: 16 }} />
-                  </button>
-                ))}
-              </div>
-              <button
-                type="button" onClick={handleSubmit}
-                disabled={!hasContent || isSubmitting || isEnded}
-                aria-label="Kirim pesan"
-                style={{
-                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                  gap: 6, padding: '0 16px', height: 42, borderRadius: 20,
-                  background: 'linear-gradient(135deg,#D4AF37 0%,#F4D03F 100%)',
-                  border: 'none', color: '#1a0e00', fontWeight: 700, fontSize: 13,
-                  cursor: !hasContent || isSubmitting || isEnded ? 'not-allowed' : 'pointer',
-                  opacity: !hasContent || isSubmitting || isEnded ? 0.35 : 1,
-                  boxShadow: '0 3px 14px rgba(212,175,55,0.4)',
-                  whiteSpace: 'nowrap', touchAction: 'none',
-                }}
-              >
-                <Send style={{ width: 14, height: 14 }} />
-                {isSubmitting ? 'Mengirim…' : cfg.submitLabel}
-              </button>
+            {/* Undo / Clear */}
+            <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
+              {([
+                [undo,       Undo2,  'Undo',        history.length === 0],
+                [clearCanvas, Trash2, 'Hapus semua', false],
+              ] as [() => void, any, string, boolean][]).map(([fn, Icon, label, dis]) => (
+                <button key={label} type="button" onClick={fn} disabled={dis} aria-label={label}
+                  style={{
+                    ...btnBase, width: 38, height: 38, borderRadius: 12,
+                    background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.15)',
+                    color: 'rgba(255,255,255,0.85)',
+                    opacity: dis ? 0.35 : 1, cursor: dis ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  <Icon style={{ width: 16, height: 16 }} />
+                </button>
+              ))}
             </div>
 
-            {/* Collapse button */}
+            {/* Submit */}
+            <button type="button" onClick={handleSubmit}
+              disabled={!hasContent || submitting || isEnded}
+              style={{
+                ...btnBase, gap: 6, height: 42, borderRadius: 20, padding: '0 16px',
+                background: 'linear-gradient(135deg,#D4AF37,#F4D03F)',
+                color: '#1a0e00', fontWeight: 700, fontSize: 13,
+                whiteSpace: 'nowrap', width: '100%',
+                opacity: !hasContent || submitting || isEnded ? 0.35 : 1,
+                cursor:  !hasContent || submitting || isEnded ? 'not-allowed' : 'pointer',
+                boxShadow: '0 3px 12px rgba(212,175,55,0.4)',
+              }}
+            >
+              <Send style={{ width: 14, height: 14 }} />
+              {submitting ? 'Mengirim…' : cfg.submit}
+            </button>
+
+            {/* Collapse */}
             <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <button
-                type="button" onClick={() => setToolbarCollapsed(true)} aria-label="Sembunyikan toolbar"
+              <button type="button" onClick={() => setToolbarCollapsed(true)} aria-label="Sembunyikan"
                 style={{
-                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                  width: 36, height: 36, borderRadius: 12,
-                  background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.15)',
-                  color: 'rgba(255,255,255,0.7)', cursor: 'pointer', touchAction: 'none',
+                  ...btnBase, width: 34, height: 34, borderRadius: 10,
+                  background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.12)',
+                  color: 'rgba(255,255,255,0.65)',
                 }}
               >
-                <ChevronLeft style={{ width: 16, height: 16 }} />
+                <ChevronLeft style={{ width: 15, height: 15 }} />
               </button>
             </div>
           </div>
         )}
       </div>
-    ) : null;
+    );
 
+    // ── Render ────────────────────────────────────────────────────────────────
     return (
       <div
-        className={`flex flex-col ${className}`}
-        style={{ minHeight: 0, height: isKiosk ? '100%' : undefined }}
+        className={className}
+        style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden' }}
       >
-        <div style={{ position: 'relative', flex: 1, minHeight: 0, overflow: 'hidden' }}>
-          <motion.div
-            animate={{ opacity: canvasOpacity }}
-            transition={{ duration: 0.5 }}
+        {/* Canvas wrapper — offsetWidth/offsetHeight source of truth */}
+        <div
+          ref={wrapperRef}
+          style={{
+            position:    'absolute',
+            inset:       0,
+            overflow:    'hidden',
+            touchAction: 'none',
+          }}
+        >
+          <canvas
+            ref={canvasRef}
             style={{
-              position: 'absolute', inset: 0,
-              borderRadius: isKiosk ? 0 : '1rem',
-              overflow: 'hidden',
-              // ── FIX #9: touch-action NONE di wrapper motion.div juga ────
-              touchAction:   'none',
-              pointerEvents: 'auto',
-              boxShadow: isKiosk ? 'none' : `0 0 0 2px ${cfg.borderColor}, 0 8px 40px ${cfg.glowColor}`,
+              display:      'block',
+              // width/height set programmatically by initCanvas
+              background:   isKiosk ? 'transparent' : cfg.bg,
+              touchAction:  'none',
+              pointerEvents:'auto',
+              userSelect:   'none',
+              cursor:       isEnded ? 'not-allowed' : tool === 'eraser' ? 'cell' : 'crosshair',
             }}
-          >
-            <canvas
-              ref={canvasRef}
-              style={{
-                display: 'block', width: '100%', height: '100%',
-                background: isKiosk ? 'transparent' : cfg.canvasBg,
-                // ── FIX #10: CSS touch-action & pointer-events di canvas ──
-                touchAction:   'none',
-                pointerEvents: 'auto',
-                userSelect:    'none',
-                WebkitUserSelect: 'none',
-                // ── FIX #11: -ms-touch-action untuk IE/Edge lama di Xibo ──
-                // @ts-ignore
-                msTouchAction: 'none',
-                cursor: isEnded ? 'not-allowed' : tool === 'eraser' ? 'cell' : 'crosshair',
-              }}
-            />
+          />
 
-            {/* Hint text */}
-            <div
-              className="absolute top-4 left-5 text-sm italic font-serif pointer-events-none select-none"
-              style={{
-                color: 'rgba(180,160,120,0.6)',
-                opacity: hasContent ? 0 : 1,
-                transition: 'opacity 0.3s',
-              }}
-            >
+          {/* Hint */}
+          {!hasContent && (
+            <div style={{
+              position: 'absolute', top: 16, left: 20,
+              fontSize: 14, fontStyle: 'italic', fontFamily: 'serif',
+              color: 'rgba(180,155,100,0.55)',
+              pointerEvents: 'none', userSelect: 'none',
+            }}>
               {cfg.hint}
             </div>
+          )}
 
-            {/* Corner accents (non-kiosk) */}
-            {theme === 'wedding' && !frameUrl && !isKiosk && (
-              <>
-                {['top-2 left-2 border-t border-l', 'top-2 right-2 border-t border-r',
-                  'bottom-2 left-2 border-b border-l', 'bottom-2 right-2 border-b border-r'].map((cls, i) => (
-                  <div key={i} className={`absolute w-5 h-5 pointer-events-none ${cls}`}
-                    style={{ borderColor: 'rgba(212,175,55,0.5)' }} />
-                ))}
-              </>
-            )}
-
-            {/* Event ended overlay */}
-            {isEnded && (
-              <div className="absolute inset-0 flex items-center justify-center rounded-2xl"
-                style={{ background: 'rgba(0,0,0,0.6)' }}>
-                <div className="text-center text-white space-y-2">
-                  <div className="text-4xl">🎊</div>
-                  <p className="text-lg font-serif">Acara Telah Selesai</p>
-                  <p className="text-sm" style={{ opacity: 0.7 }}>Terima kasih atas partisipasi Anda</p>
-                </div>
+          {/* Ended overlay */}
+          {isEnded && (
+            <div style={{
+              position: 'absolute', inset: 0,
+              background: 'rgba(0,0,0,0.6)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <div style={{ textAlign: 'center', color: '#fff' }}>
+                <div style={{ fontSize: 42, marginBottom: 8 }}>🎊</div>
+                <p style={{ fontSize: 18, fontFamily: 'serif', margin: 0 }}>Acara Telah Selesai</p>
+                <p style={{ fontSize: 13, margin: '4px 0 0', opacity: 0.65 }}>Terima kasih atas partisipasi Anda</p>
               </div>
-            )}
+            </div>
+          )}
 
-            {/* Success flash */}
-            <AnimatePresence>
-              {showSuccess && (
-                <motion.div
-                  initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                  className="absolute inset-0 flex items-center justify-center rounded-2xl"
-                  style={{ background: 'linear-gradient(135deg,rgba(212,175,55,0.15),rgba(244,208,63,0.15))' }}
-                >
-                  <motion.div initial={{ scale: 0.5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="text-center">
-                    <div className="text-5xl mb-2">✨</div>
-                    <p className="text-lg font-serif" style={{ color: '#2C1810' }}>Ucapan Terkirim!</p>
-                  </motion.div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </motion.div>
+          {/* Success flash */}
+          {showSuccess && (
+            <div style={{
+              position: 'absolute', inset: 0,
+              background: 'rgba(212,175,55,0.12)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: 48, marginBottom: 8 }}>✨</div>
+                <p style={{ fontSize: 18, fontFamily: 'serif', color: '#2C1810', margin: 0 }}>Ucapan Terkirim!</p>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Kiosk toolbar via portal */}
-        {toolbarPanel && (portalReady ? createPortal(toolbarPanel, document.body) : toolbarPanel)}
-
-        {/* Display variant controls */}
-        {isDisplay && !isEnded && (
-          <div style={{
-            position: 'fixed', top: 180, left: 180, zIndex: 10050,
-            display: 'flex', flexDirection: 'column', gap: 8, padding: '10px',
-            borderRadius: 18, background: 'rgba(20,12,0,0.88)',
-            border: '1px solid rgba(255,255,255,0.18)', boxShadow: '0 20px 50px rgba(0,0,0,0.18)',
-            touchAction: 'none',
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'center' }}>
-              {[
-                { fn: undo,       Icon: Undo2,  label: 'Undo',       disabled: history.length === 0 },
-                { fn: clearCanvas, Icon: Trash2, label: 'Hapus semua', disabled: false },
-              ].map(({ fn, Icon, label, disabled }) => (
-                <button key={label} onClick={fn} disabled={disabled}
-                  style={{
-                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                    width: 38, height: 38, borderRadius: 12,
-                    background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.1)',
-                    color: '#fff', opacity: disabled ? 0.35 : 1,
-                    cursor: disabled ? 'not-allowed' : 'pointer', touchAction: 'none',
-                  }}
-                >
-                  <Icon className="w-4 h-4" />
-                </button>
-              ))}
-            </div>
-            <motion.button
-              whileTap={{ scale: 0.94 }} onClick={handleSubmit}
-              disabled={!hasContent || isSubmitting}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 8, padding: '8px 20px',
-                borderRadius: 99, fontWeight: 600, fontSize: 14,
-                background: 'linear-gradient(135deg,#C9A84C 0%,#F0D080 50%,#C9A84C 100%)',
-                boxShadow: '0 4px 20px rgba(201,168,76,0.5)', color: '#1a0e00',
-                border: 'none', cursor: !hasContent || isSubmitting ? 'not-allowed' : 'pointer',
-                opacity: !hasContent || isSubmitting ? 0.3 : 1, touchAction: 'none',
-              }}
-            >
-              <Send className="w-4 h-4" />
-              <span>{isSubmitting ? 'Mengirim…' : 'Kirim Pesan'}</span>
-            </motion.button>
-          </div>
-        )}
+        {!isEnded && variant === 'kiosk' && portalReady
+          ? createPortal(toolbar, document.body)
+          : !isEnded && variant === 'kiosk' && toolbar}
       </div>
     );
   }

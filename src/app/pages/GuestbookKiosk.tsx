@@ -1,6 +1,28 @@
+/**
+ * GuestbookKiosk.tsx — XHB/Xibo Signage Edition
+ *
+ * Layer order (flat, no nesting kompleks):
+ *  z-1   Background
+ *  z-2   Canvas (EnhancedCanvas fills inset:0)
+ *  z-3   Floating particles (pointer-events:none)
+ *  z-5   Frame PNG (pointer-events:none)
+ *  z-100 Secret tap zone
+ *  z-200 Idle overlay (solid rgba, NO backdrop-filter)
+ *  z-201 Idle modal
+ *  z-9999 Toolbar (via portal, position:fixed)
+ *
+ * XHB rules applied here:
+ *  ✅ position:fixed + inset:0 (bukan 100vh / 100dvh)
+ *  ✅ NO CSS transform/scale
+ *  ✅ NO backdrop-filter
+ *  ✅ NO CSS grid
+ *  ✅ NO conic-gradient
+ *  ✅ Solid rgba() only
+ *  ✅ touch-action:none di semua elemen interaktif
+ */
+
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router';
-import { motion, AnimatePresence } from 'motion/react';
 import { useGuestbook } from '../contexts/GuestbookContext';
 import { EnhancedCanvas, EnhancedCanvasHandle } from '../components/EnhancedCanvas';
 import { HeartAnimation } from '../components/HeartAnimation';
@@ -8,211 +30,147 @@ import { FloatingParticles } from '../components/FloatingParticles';
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert';
 
 const THEME_META = {
-  wedding: {
-    bg:          '#f5ede0',
-    accentColor: '#D4AF37',
-    heartColor:  '#D4AF37',
-  },
-  graduation: {
-    bg:          '#eef2fb',
-    accentColor: '#1e3a8a',
-    heartColor:  '#3b82f6',
-  },
-  corporate: {
-    bg:          '#f1f3f6',
-    accentColor: '#334155',
-    heartColor:  '#64748b',
-  },
+  wedding:    { bg: '#f5ede0', accent: '#D4AF37', heart: '#D4AF37' },
+  graduation: { bg: '#eef2fb', accent: '#1e3a8a', heart: '#3b82f6' },
+  corporate:  { bg: '#f1f3f6', accent: '#334155', heart: '#64748b' },
 } as const;
 
-/**
- * LAYOUT — Signage 1920×1080:
- *
- * ── PENTING UNTUK SPLIT LAYOUT (atas: Xibo slideshow, bawah: web guestbook) ──
- * Gunakan height: 100% bukan 100vh, karena ketika Xibo menaruh web ini
- * di region bawah (mis. 1920×540), 100vh akan mengambil full 1080px dan
- * menyebabkan konten terpotong. Dengan height: 100%, konten mengisi
- * area yang diberikan Xibo saja.
- *
- * Di Xibo: set Web Region height ke setengah layar (mis. 540px untuk 1080p).
- * Di CSS: #root height: 100% sudah di-set di index.html.
- *
- * Xibo old-browser compatibility:
- *   - NO backdrop-filter / WebkitBackdropFilter
- *   - NO conic-gradient
- *   - NO CSS grid
- *   - Solid rgba() backgrounds only
- *   - touch-action: none wajib di semua elemen interaktif
- */
+const IDLE_TRIGGER_MS  = 90_000; // 90 detik tidak ada aktivitas
+const IDLE_WARNING_SEC = 60;     // countdown 60 detik
 
 export function GuestbookKiosk() {
   const { settings, settingsLoading, settingsError, storageError, addMessage } = useGuestbook();
-  const navigate   = useNavigate();
-  const canvasRef  = useRef<EnhancedCanvasHandle>(null);
+  const navigate  = useNavigate();
+  const canvasRef = useRef<EnhancedCanvasHandle>(null);
 
-  const [showHearts,      setShowHearts]      = useState(false);
-  const [showThx,         setShowThx]         = useState(false);
-  const [hasDrawing,      setHasDrawing]       = useState(false);
-  const [tapCount,        setTapCount]         = useState(0);
-  const [tapTimer,        setTapTimer]         = useState<ReturnType<typeof setTimeout> | null>(null);
-  const [warningVisible,  setWarningVisible]   = useState(false);
-  const [countdown,       setCountdown]        = useState(60);
+  const [showHearts,    setShowHearts]    = useState(false);
+  const [showThx,       setShowThx]       = useState(false);
+  const [hasDrawing,    setHasDrawing]    = useState(false);
+  const [warnVisible,   setWarnVisible]   = useState(false);
+  const [countdown,     setCountdown]     = useState(IDLE_WARNING_SEC);
+  const [tapCount,      setTapCount]      = useState(0);
+  const [tapTimer,      setTapTimer]      = useState<ReturnType<typeof setTimeout> | null>(null);
 
-  const idleTimerRef      = useRef<ReturnType<typeof setTimeout>  | null>(null);
-  const warningTimerRef   = useRef<ReturnType<typeof setTimeout>  | null>(null);
-  const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const idleRef      = useRef<ReturnType<typeof setTimeout>  | null>(null);
+  const warnRef      = useRef<ReturnType<typeof setTimeout>  | null>(null);
+  const countRef     = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const theme = settings.eventType;
-  const meta  = THEME_META[theme];
+  const meta = THEME_META[settings.eventType];
 
-  // ── Idle helpers ──────────────────────────────────────────────────────────
+  // ── Idle timer ─────────────────────────────────────────────────────────────
 
-  const clearIdleTimers = useCallback(() => {
-    if (idleTimerRef.current)      { clearTimeout(idleTimerRef.current);       idleTimerRef.current = null; }
-    if (warningTimerRef.current)   { clearTimeout(warningTimerRef.current);    warningTimerRef.current = null; }
-    if (countdownTimerRef.current) { clearInterval(countdownTimerRef.current); countdownTimerRef.current = null; }
+  const clearTimers = useCallback(() => {
+    if (idleRef.current)  { clearTimeout(idleRef.current);   idleRef.current  = null; }
+    if (warnRef.current)  { clearTimeout(warnRef.current);   warnRef.current  = null; }
+    if (countRef.current) { clearInterval(countRef.current); countRef.current = null; }
   }, []);
 
-  const resetIdleWarning = useCallback(() => {
-    clearIdleTimers();
-    setWarningVisible(false);
-    setCountdown(60);
-  }, [clearIdleTimers]);
+  const hideWarning = useCallback(() => {
+    clearTimers();
+    setWarnVisible(false);
+    setCountdown(IDLE_WARNING_SEC);
+  }, [clearTimers]);
 
-  // Idle timeout ditingkatkan ke 60 detik (dari 10) agar nyaman di event
-  const IDLE_WARNING_SECONDS = 60;
-  const IDLE_TRIGGER_MS      = 90_000; // 90 detik tidak ada aktivitas → warning
-
-  const triggerIdleWarning = useCallback(() => {
-    setWarningVisible(true);
-    setCountdown(IDLE_WARNING_SECONDS);
-    countdownTimerRef.current = setInterval(() => {
-      setCountdown(prev => (prev <= 1 ? 0 : prev - 1));
-    }, 1000);
-    warningTimerRef.current = setTimeout(() => {
+  const showWarning = useCallback(() => {
+    setWarnVisible(true);
+    setCountdown(IDLE_WARNING_SEC);
+    countRef.current = setInterval(() => setCountdown(p => Math.max(0, p - 1)), 1000);
+    warnRef.current  = setTimeout(() => {
       canvasRef.current?.reset();
       setHasDrawing(false);
-      resetIdleWarning();
-    }, IDLE_WARNING_SECONDS * 1000);
-  }, [resetIdleWarning]);
+      hideWarning();
+    }, IDLE_WARNING_SEC * 1000);
+  }, [hideWarning]);
 
-  const startIdleTimer = useCallback(() => {
-    clearIdleTimers();
-    idleTimerRef.current = setTimeout(() => triggerIdleWarning(), IDLE_TRIGGER_MS);
-  }, [clearIdleTimers, triggerIdleWarning]);
+  const startIdle = useCallback(() => {
+    clearTimers();
+    idleRef.current = setTimeout(showWarning, IDLE_TRIGGER_MS);
+  }, [clearTimers, showWarning]);
 
-  const handleUserActivity = useCallback(() => {
+  const handleActivity = useCallback(() => {
     if (!hasDrawing) return;
-    if (warningVisible) resetIdleWarning();
-    startIdleTimer();
-  }, [hasDrawing, startIdleTimer, warningVisible, resetIdleWarning]);
+    if (warnVisible) hideWarning();
+    startIdle();
+  }, [hasDrawing, warnVisible, hideWarning, startIdle]);
 
-  useEffect(() => () => clearIdleTimers(), [clearIdleTimers]);
+  useEffect(() => () => clearTimers(), [clearTimers]);
 
   // ── Canvas handlers ────────────────────────────────────────────────────────
 
   const handleSubmit = useCallback((imageData: string) => {
     addMessage(imageData);
-    resetIdleWarning();
-    clearIdleTimers();
+    clearTimers();
+    hideWarning();
+    setHasDrawing(false);
     setShowHearts(true);
     setShowThx(true);
-    setHasDrawing(false);
     setTimeout(() => setShowThx(false), 3000);
-  }, [addMessage, clearIdleTimers, resetIdleWarning]);
+  }, [addMessage, clearTimers, hideWarning]);
 
-  const handleCanvasDrawStart = useCallback(() => {
+  const handleDrawStart = useCallback(() => {
     setHasDrawing(true);
-    resetIdleWarning();
-    startIdleTimer();
-  }, [resetIdleWarning, startIdleTimer]);
+    hideWarning();
+    startIdle();
+  }, [hideWarning, startIdle]);
 
-  const handleCanvasClear = useCallback(() => {
+  const handleClear = useCallback(() => {
     setHasDrawing(false);
-    resetIdleWarning();
-  }, [resetIdleWarning]);
+    hideWarning();
+  }, [hideWarning]);
 
-  // ── Secret tap (5× di pojok kiri atas → admin) ───────────────────────────
+  // ── Secret tap ─────────────────────────────────────────────────────────────
 
   const handleSecretTap = () => {
-    const next = tapCount + 1;
-    setTapCount(next);
+    const n = tapCount + 1;
+    setTapCount(n);
     if (tapTimer) clearTimeout(tapTimer);
-    const t = setTimeout(() => setTapCount(0), 2500);
-    setTapTimer(t);
-    if (next >= 5) {
-      setTapCount(0);
-      if (tapTimer) clearTimeout(tapTimer);
-      navigate('/guestbook/admin');
-    }
+    setTapTimer(setTimeout(() => setTapCount(0), 2500));
+    if (n >= 5) { setTapCount(0); navigate('/guestbook/admin'); }
   };
 
-  // ── Loading / Error states ─────────────────────────────────────────────────
+  // ── Loading / Error ────────────────────────────────────────────────────────
 
-  if (settingsLoading) {
-    return (
-      <div style={{
-        // FIX: 100% bukan 100vh — untuk split layout Xibo
-        width: '100%', height: '100%', minHeight: '100vh',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: '#0a0a0f',
-      }}>
-        <p style={{ color: 'rgba(255,255,255,0.8)', fontSize: 14 }}>Memuat pengaturan event…</p>
+  if (settingsLoading) return (
+    <div style={{ position: 'fixed', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0a0a0f' }}>
+      <p style={{ color: 'rgba(255,255,255,0.8)', fontSize: 15 }}>Memuat pengaturan event…</p>
+    </div>
+  );
+
+  if (settingsError) return (
+    <div style={{ position: 'fixed', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0a0a0f', padding: 24 }}>
+      <div style={{ maxWidth: 560, textAlign: 'center', color: '#fff' }}>
+        <p style={{ fontSize: 16, color: '#ef4444', marginBottom: 8 }}>⚠️ Kesalahan Pengaturan</p>
+        <p style={{ fontSize: 14, marginBottom: 12 }}>{settingsError}</p>
+        <p style={{ fontSize: 12, opacity: 0.55 }}>Hubungi admin untuk memeriksa konfigurasi di admin panel.</p>
       </div>
-    );
-  }
+    </div>
+  );
 
-  if (settingsError) {
-    return (
-      <div style={{
-        width: '100%', height: '100%', minHeight: '100vh',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: '#0a0a0f', padding: '20px',
-      }}>
-        <div style={{ maxWidth: '600px', textAlign: 'center', color: 'rgba(255,255,255,0.9)' }}>
-          <p style={{ fontSize: 16, marginBottom: 8, color: '#ef4444' }}>⚠️ Kesalahan Pengaturan</p>
-          <p style={{ fontSize: 14, marginBottom: 16 }}>{settingsError}</p>
-          <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)' }}>
-            Hubungi admin untuk memeriksa konfigurasi event di admin panel.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  // ── Render ──────────────────────────────────────────────────────────────────
+  // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
     <>
       {/*
-        ── GLOBAL STYLE RESET ──────────────────────────────────────────────────
-        Paksa overflow hidden dan touch-action none di semua level.
-        Ini wajib untuk Xibo: tanpa ini, WebView akan intercept touch gestures
-        sebelum sampai ke canvas dan drawing tidak berfungsi.
+        GLOBAL STYLE — injected di sini sebagai safety net
+        touch-action juga diinjeksi oleh EnhancedCanvas, tapi kita pasang
+        di sini juga agar berlaku sebelum canvas mount.
 
-        CATATAN SPLIT LAYOUT:
-        Jika web ini ditampilkan di region bawah Xibo (mis. 540px tinggi),
-        gunakan: height: 100% di html/body/#root (bukan 100vh).
-        Set di index.html: <style>html, body { height: 100%; } #root { height: 100%; }</style>
+        PENTING: style ini TIDAK akan override style yg lebih specific di element.
       */}
       <style>{`
-        *, *::before, *::after { box-sizing: border-box; }
         html, body, #root {
-          margin: 0; padding: 0;
+          margin: 0; padding: 0; overflow: hidden;
           width: 100%; height: 100%;
-          overflow: hidden;
-          touch-action: none;
+          touch-action: none; -ms-touch-action: none;
         }
+        *, *::before, *::after { box-sizing: border-box; }
       `}</style>
 
+      {/* ── Storage error toast ─────────────────────────────────────────────── */}
       {storageError && (
-        <div style={{
-          position: 'fixed', top: 16, left: 0, right: 0, zIndex: 9500,
-          display: 'flex', justifyContent: 'center', padding: '0 16px',
-          pointerEvents: 'none',
-        }}>
-          <div style={{ width: '100%', maxWidth: 760, pointerEvents: 'auto' }}>
-            <Alert variant="destructive" className="shadow-2xl">
+        <div style={{ position: 'fixed', top: 16, left: 16, right: 16, zIndex: 9500, pointerEvents: 'none' }}>
+          <div style={{ maxWidth: 720, margin: '0 auto', pointerEvents: 'auto' }}>
+            <Alert variant="destructive">
               <AlertTitle>Masalah Penyimpanan</AlertTitle>
               <AlertDescription>{storageError}</AlertDescription>
             </Alert>
@@ -221,228 +179,205 @@ export function GuestbookKiosk() {
       )}
 
       {/*
-        ── Root container ───────────────────────────────────────────────────────
-        FIX: position: fixed + inset:0 diganti ke width/height: 100%
-        agar tidak keluar dari area region Xibo saat split layout.
-        position: fixed mengambil full window, bukan area region.
+        ── ROOT CONTAINER ────────────────────────────────────────────────────────
+        position: fixed + inset: 0  →  mengisi area Xibo region
+        TIDAK pakai 100vw/100vh (fake viewport di XHB)
+        TIDAK pakai transform
       */}
       <div style={{
-        position: 'relative',
-        width:    '100%',
-        height:   '100%',
-        background: meta.bg,
-        overflow: 'hidden',
+        position:    'fixed',
+        inset:       0,
+        background:  meta.bg,
+        overflow:    'hidden',
         touchAction: 'none',
       }}>
-        <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden' }}>
 
-          {/* ── Canvas: fills container, behind frame ── */}
-          <div style={{
-            position: 'absolute', inset: 0, zIndex: 1,
-            width: '100%', height: '100%',
-            touchAction: 'none',
-          }}>
-            <EnhancedCanvas
-              ref={canvasRef}
-              theme={theme}
-              frameUrl={settings.frameUrl}
-              onSubmit={handleSubmit}
-              isEnded={settings.isEnded}
-              variant="kiosk"
-              onDrawStart={handleCanvasDrawStart}
-              onUserActivity={handleUserActivity}
-              onClear={handleCanvasClear}
-              className="w-full h-full"
-            />
-          </div>
-
-          {/* ── Floating particles ── */}
-          <div style={{ position: 'absolute', inset: 0, zIndex: 2, pointerEvents: 'none' }}>
-            <FloatingParticles />
-          </div>
-
-          {/* ── Frame overlay ── */}
-          {settings.frameUrl && (
-            <img
-              src={settings.frameUrl}
-              alt="Frame overlay"
-              style={{
-                position: 'absolute', inset: 0,
-                width: '100%', height: '100%',
-                objectFit: 'cover', objectPosition: 'center',
-                zIndex: 5,
-                pointerEvents: 'none',
-                display: 'block',
-              }}
-            />
-          )}
-
-          {/* ── Idle overlay: solid bg, NO backdrop-filter (Xibo compat) ── */}
-          <AnimatePresence>
-            {warningVisible && (
-              <motion.div
-                key="idle-overlay"
-                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                transition={{ duration: 0.3 }}
-                style={{
-                  position: 'absolute', inset: 0, zIndex: 9998,
-                  background: 'rgba(0,0,0,0.72)',
-                  touchAction: 'none',
-                }}
-              />
-            )}
-          </AnimatePresence>
-
-          {/* ── Idle modal ── */}
-          <AnimatePresence>
-            {warningVisible && (
-              <motion.div
-                key="idle-modal"
-                initial={{ opacity: 0, scale: 0.92 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.92 }}
-                transition={{ duration: 0.3, ease: 'easeOut' }}
-                style={{
-                  position: 'absolute',
-                  top: '50%', left: '50%',
-                  transform: 'translate(-50%, -50%)',
-                  zIndex: 9999,
-                  width: 'calc(100% - 32px)', maxWidth: 520,
-                  touchAction: 'none',
-                }}
-              >
-                <div style={{
-                  borderRadius: 20, padding: 32,
-                  background: '#ffffff',
-                  border: '1px solid rgba(0,0,0,0.08)',
-                  boxShadow: '0 24px 64px rgba(0,0,0,0.25)',
-                }}>
-                  <p style={{ fontSize: 22, fontWeight: 700, color: '#111827', textAlign: 'center', marginBottom: 8 }}>
-                    Masih ingin melanjutkan?
-                  </p>
-                  <p style={{ textAlign: 'center', color: '#6b7280', fontSize: 15, lineHeight: 1.6, marginBottom: 24 }}>
-                    Sesi akan direset jika tidak ada aktivitas.
-                  </p>
-
-                  <div style={{ textAlign: 'center', marginBottom: 28 }}>
-                    <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 10 }}>Otomatis reset dalam</p>
-                    <p style={{ fontSize: 42, fontWeight: 800, color: '#111827', lineHeight: 1, marginBottom: 12 }}>
-                      {countdown}
-                      <span style={{ fontSize: 16, fontWeight: 500, color: '#9ca3af', marginLeft: 6 }}>detik</span>
-                    </p>
-                    {/* Progress bar — NO conic-gradient (Xibo compat) */}
-                    <div style={{ height: 6, borderRadius: 3, background: 'rgba(212,175,55,0.2)', overflow: 'hidden' }}>
-                      <motion.div
-                        style={{
-                          height: '100%', borderRadius: 3,
-                          background: 'linear-gradient(90deg,#D4AF37,#F4D03F)',
-                          originX: 0,
-                        }}
-                        animate={{ scaleX: countdown / IDLE_WARNING_SECONDS }}
-                        transition={{ duration: 0.9, ease: 'linear' }}
-                      />
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
-                    <button
-                      onClick={handleUserActivity}
-                      style={{
-                        flex: 1, padding: '12px 20px', borderRadius: 12,
-                        fontWeight: 700, color: '#fff',
-                        background: 'linear-gradient(135deg, #D4AF37, #F0D080)',
-                        border: 'none', cursor: 'pointer', fontSize: 15,
-                        boxShadow: '0 4px 15px rgba(212,175,55,0.3)',
-                        touchAction: 'none',
-                      }}
-                    >
-                      ✎ Lanjutkan
-                    </button>
-                    <button
-                      onClick={() => {
-                        canvasRef.current?.reset();
-                        setHasDrawing(false);
-                        resetIdleWarning();
-                      }}
-                      style={{
-                        flex: 1, padding: '12px 20px', borderRadius: 12,
-                        fontWeight: 700, color: '#64748b',
-                        background: 'rgba(100,116,139,0.08)',
-                        border: '1.5px solid rgba(100,116,139,0.25)',
-                        cursor: 'pointer', fontSize: 15,
-                        touchAction: 'none',
-                      }}
-                    >
-                      🗑 Reset Sekarang
-                    </button>
-                  </div>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* ── Secret tap zone ── */}
-          <div
-            onClick={handleSecretTap}
-            style={{
-              position: 'absolute', top: 0, left: 0,
-              width: 64, height: 64, zIndex: 30,
-              opacity: 0, cursor: 'pointer',
-              touchAction: 'none',
-            }}
+        {/* ── z-2: Canvas layer ─── */}
+        <div style={{ position: 'absolute', inset: 0, zIndex: 2, touchAction: 'none' }}>
+          <EnhancedCanvas
+            ref={canvasRef}
+            theme={settings.eventType}
+            frameUrl={settings.frameUrl}
+            onSubmit={handleSubmit}
+            isEnded={settings.isEnded}
+            variant="kiosk"
+            onDrawStart={handleDrawStart}
+            onUserActivity={handleActivity}
+            onClear={handleClear}
+            className="w-full h-full"
           />
         </div>
+
+        {/* ── z-3: Floating particles (decorative, pointer-events none) ─── */}
+        <div style={{ position: 'absolute', inset: 0, zIndex: 3, pointerEvents: 'none' }}>
+          <FloatingParticles />
+        </div>
+
+        {/* ── z-5: Frame PNG overlay ─── */}
+        {settings.frameUrl && (
+          <img
+            src={settings.frameUrl}
+            alt=""
+            style={{
+              position:       'absolute',
+              inset:          0,
+              width:          '100%',
+              height:         '100%',
+              objectFit:      'contain',   // contain = no crop, full frame visible
+              objectPosition: 'center',
+              zIndex:         5,
+              pointerEvents:  'none',
+              display:        'block',
+            }}
+          />
+        )}
+
+        {/* ── z-100: Secret tap zone (top-left 64×64) ─── */}
+        <div
+          onClick={handleSecretTap}
+          style={{
+            position: 'absolute', top: 0, left: 0,
+            width: 64, height: 64, zIndex: 100,
+            opacity: 0, cursor: 'pointer', touchAction: 'none',
+          }}
+        />
+
+        {/* ── z-200: Idle overlay — solid rgba, NO backdrop-filter ─── */}
+        {warnVisible && (
+          <div style={{
+            position:   'absolute',
+            inset:      0,
+            zIndex:     200,
+            background: 'rgba(0,0,0,0.72)',
+            touchAction:'none',
+          }} />
+        )}
+
+        {/* ── z-201: Idle modal ─── */}
+        {warnVisible && (
+          <div style={{
+            position:  'absolute',
+            top:       '50%',
+            left:      '50%',
+            transform: 'translate(-50%, -50%)',  // only transform used — centering only, no scale
+            zIndex:    201,
+            width:     'calc(100% - 32px)',
+            maxWidth:  500,
+            touchAction: 'none',
+          }}>
+            <div style={{
+              borderRadius: 20,
+              padding:      28,
+              background:   '#ffffff',
+              boxShadow:    '0 16px 48px rgba(0,0,0,0.3)',
+            }}>
+              <p style={{ fontSize: 20, fontWeight: 700, textAlign: 'center', margin: '0 0 6px', color: '#111' }}>
+                Masih ingin melanjutkan?
+              </p>
+              <p style={{ textAlign: 'center', color: '#6b7280', fontSize: 14, margin: '0 0 20px', lineHeight: 1.6 }}>
+                Sesi akan direset jika tidak ada aktivitas.
+              </p>
+
+              {/* Countdown */}
+              <div style={{ textAlign: 'center', marginBottom: 24 }}>
+                <p style={{ fontSize: 12, color: '#9ca3af', margin: '0 0 6px' }}>Otomatis reset dalam</p>
+                <p style={{ fontSize: 40, fontWeight: 800, color: '#111', margin: '0 0 10px', lineHeight: 1 }}>
+                  {countdown}
+                  <span style={{ fontSize: 14, color: '#9ca3af', fontWeight: 500, marginLeft: 4 }}>detik</span>
+                </p>
+                {/* Progress bar — linear only, NO conic-gradient */}
+                <div style={{ height: 6, borderRadius: 3, background: 'rgba(212,175,55,0.2)', overflow: 'hidden' }}>
+                  <div style={{
+                    height: '100%', borderRadius: 3,
+                    background: 'linear-gradient(90deg,#D4AF37,#F4D03F)',
+                    width: (countdown / IDLE_WARNING_SEC * 100) + '%',
+                    transition: 'width 0.9s linear',
+                  }} />
+                </div>
+              </div>
+
+              {/* Buttons */}
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button
+                  onClick={handleActivity}
+                  style={{
+                    flex: 1, padding: '11px 16px', borderRadius: 12,
+                    fontWeight: 700, color: '#fff', fontSize: 14,
+                    background: 'linear-gradient(135deg,#D4AF37,#F0D080)',
+                    border: 'none', cursor: 'pointer', touchAction: 'none',
+                    boxShadow: '0 3px 12px rgba(212,175,55,0.35)',
+                  }}
+                >
+                  ✎ Lanjutkan
+                </button>
+                <button
+                  onClick={() => { canvasRef.current?.reset(); setHasDrawing(false); hideWarning(); }}
+                  style={{
+                    flex: 1, padding: '11px 16px', borderRadius: 12,
+                    fontWeight: 700, color: '#64748b', fontSize: 14,
+                    background: 'rgba(100,116,139,0.08)',
+                    border: '1.5px solid rgba(100,116,139,0.25)',
+                    cursor: 'pointer', touchAction: 'none',
+                  }}
+                >
+                  🗑 Reset
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* ── Global overlays ──────────────────────────────────────────────────── */}
-
+      {/* ── Heart animation (positioned fixed by HeartAnimation internally) ─── */}
       <HeartAnimation
         trigger={showHearts}
         onComplete={() => setShowHearts(false)}
-        color={meta.heartColor}
+        color={meta.heart}
       />
 
-      {/* Thank-you toast */}
-      <AnimatePresence>
-        {showThx && (
-          <motion.div
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            style={{
-              position: 'fixed', inset: 0, zIndex: 9000,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              background: 'rgba(0,0,0,0.35)',
-              touchAction: 'none',
-            }}
-          >
-            <motion.div
-              initial={{ scale: 0.8, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.8, y: 20 }}
-              style={{
-                background: '#fff', borderRadius: 28, padding: '36px 48px',
-                boxShadow: '0 24px 64px rgba(0,0,0,0.2)',
-                textAlign: 'center', maxWidth: 320,
-              }}
-            >
-              <div style={{ fontSize: 48, marginBottom: 12 }}>✨</div>
-              <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: '1.4rem', color: '#1f2937', margin: '0 0 8px' }}>
-                Terima Kasih!
-              </h2>
-              <p style={{ fontSize: 14, color: '#6b7280', margin: '0 0 20px' }}>
-                Ucapan Anda telah tersimpan dengan indah
-              </p>
-              <div style={{ height: 4, borderRadius: 2, overflow: 'hidden', background: '#f3f4f6' }}>
-                <motion.div
-                  initial={{ width: '0%' }} animate={{ width: '100%' }}
-                  transition={{ duration: 3, ease: 'linear' }}
-                  style={{
-                    height: '100%', borderRadius: 2,
-                    background: `linear-gradient(to right, ${meta.accentColor}, #F4D03F)`,
-                  }}
-                />
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* ── Thank-you toast ─── */}
+      {showThx && (
+        <div style={{
+          position:   'fixed',
+          inset:      0,
+          zIndex:     9000,
+          display:    'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'rgba(0,0,0,0.35)',
+          touchAction:'none',
+        }}>
+          <div style={{
+            background:   '#fff',
+            borderRadius: 24,
+            padding:      '32px 44px',
+            textAlign:    'center',
+            maxWidth:     300,
+            boxShadow:    '0 20px 56px rgba(0,0,0,0.22)',
+          }}>
+            <div style={{ fontSize: 44, marginBottom: 10 }}>✨</div>
+            <h2 style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.35rem', color: '#1f2937', margin: '0 0 6px' }}>
+              Terima Kasih!
+            </h2>
+            <p style={{ fontSize: 13, color: '#6b7280', margin: '0 0 18px' }}>
+              Ucapan Anda telah tersimpan dengan indah
+            </p>
+            {/* Linear progress bar */}
+            <div style={{ height: 4, borderRadius: 2, background: '#f3f4f6', overflow: 'hidden' }}>
+              <div style={{
+                height: '100%', borderRadius: 2,
+                background: `linear-gradient(to right, ${meta.accent}, #F4D03F)`,
+                animation: 'progress3s 3s linear forwards',
+              }} />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Keyframe for thank-you progress bar */}
+      <style>{`
+        @keyframes progress3s { from { width: 0% } to { width: 100% } }
+      `}</style>
     </>
   );
 }
