@@ -250,11 +250,43 @@ export const EnhancedCanvas = forwardRef<EnhancedCanvasHandle, EnhancedCanvasPro
       (canvas.style as any).webkitUserSelect = 'none';
       (canvas.style as any).msTouchAction   = 'none';
 
+      // ── RAF-based drawing untuk zero-lag ───────────────────────────────────
+      // Kumpulkan semua titik dari event (bisa 60-120/detik di XHB),
+      // lalu flush sekaligus di satu requestAnimationFrame.
+      // Ini eliminasi delay karena rendering sync di setiap event.
+      const pendingPoints: { x: number; y: number }[] = [];
+      let rafId: number | null = null;
+
+      const flushPoints = () => {
+        rafId = null;
+        const ctx = ctxRef.current;
+        if (!ctx || pendingPoints.length === 0) return;
+        for (const p of pendingPoints) {
+          ctx.lineTo(p.x, p.y);
+        }
+        ctx.stroke();
+        // Lanjut path dari titik terakhir
+        const last = pendingPoints[pendingPoints.length - 1];
+        ctx.beginPath();
+        ctx.moveTo(last.x, last.y);
+        pendingPoints.length = 0; // clear buffer
+      };
+
+      const scheduleFlush = () => {
+        if (rafId === null) {
+          rafId = requestAnimationFrame(flushPoints);
+        }
+      };
+
       const onStart = (e: Event) => {
         if (e.cancelable) e.preventDefault();
         if (!ctxRef.current || isEnded) return;
         const pos = getPos(e, canvas);
         if (!pos) return;
+
+        // Cancel pending RAF dari stroke sebelumnya
+        if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
+        pendingPoints.length = 0;
 
         const snap = ctxRef.current.getImageData(0, 0, canvas.width, canvas.height);
         setHistory(prev => [...prev.slice(-19), snap]);
@@ -265,7 +297,6 @@ export const EnhancedCanvas = forwardRef<EnhancedCanvasHandle, EnhancedCanvasPro
         lastPosRef.current   = pos;
         if (!hasContent) { setHasContent(true); onDrawStart?.(); }
         signalActivity();
-        console.log('[Canvas] START', pos.x.toFixed(0), pos.y.toFixed(0));
       };
 
       const onMove = (e: Event) => {
@@ -278,17 +309,21 @@ export const EnhancedCanvas = forwardRef<EnhancedCanvasHandle, EnhancedCanvasPro
           if (Math.abs(pos.x - lastPosRef.current.x) < 0.5 &&
               Math.abs(pos.y - lastPosRef.current.y) < 0.5) return;
         }
-        ctxRef.current.lineTo(pos.x, pos.y);
-        ctxRef.current.stroke();
+        pendingPoints.push(pos);
         lastPosRef.current = pos;
+        scheduleFlush();
         signalActivity();
       };
 
       const onEnd = (e: Event) => {
         if (e.cancelable) e.preventDefault();
+        // Flush sisa points sebelum close
+        if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
+        flushPoints();
         ctxRef.current?.closePath();
         isDrawingRef.current = false;
         lastPosRef.current   = null;
+        pendingPoints.length = 0;
         setTimeout(() => { pointerActiveRef.current = false; }, 50);
       };
 

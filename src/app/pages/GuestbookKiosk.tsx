@@ -213,21 +213,23 @@ export function GuestbookKiosk() {
           <FloatingParticles />
         </div>
 
-        {/* ── z-5: Frame PNG overlay ─── */}
+        {/* ── z-5: Frame PNG overlay — FULLSCREEN ─── */}
+        {/* PENTING: tidak pakai object-fit sama sekali.
+            width/height 100% + position absolute inset 0 = stretch penuh ke seluruh area.
+            object-fit: cover/contain bisa bikin frame kelihatan kecil di XHB. */}
         {settings.frameUrl && (
           <img
             src={settings.frameUrl}
             alt=""
             style={{
-              position:       'absolute',
-              inset:          0,
-              width:          '100%',
-              height:         '100%',
-              objectFit:      'contain',   // contain = no crop, full frame visible
-              objectPosition: 'center',
-              zIndex:         5,
-              pointerEvents:  'none',
-              display:        'block',
+              position:      'absolute',
+              top:           0,
+              left:          0,
+              width:         '100%',
+              height:        '100%',
+              display:       'block',
+              zIndex:        5,
+              pointerEvents: 'none',
             }}
           />
         )}
