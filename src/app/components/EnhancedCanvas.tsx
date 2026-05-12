@@ -144,7 +144,8 @@ export const EnhancedCanvas = forwardRef<EnhancedCanvasHandle, EnhancedCanvasPro
         console.warn('[Canvas] offsetWidth=0, using window dims:', w, h);
       }
 
-      const dpr = Math.min(window.devicePixelRatio || 1, 2); // cap at 2x for perf
+      const dpr = 1; // XHB hardware: DPR 2x = canvas 4x lebih besar = lambat.
+      // Signage dilihat dari jarak jauh, 1x DPR sudah cukup tajam.
       canvas.width  = Math.round(w * dpr);
       canvas.height = Math.round(h * dpr);
       canvas.style.width  = w + 'px';
@@ -250,31 +251,29 @@ export const EnhancedCanvas = forwardRef<EnhancedCanvasHandle, EnhancedCanvasPro
       (canvas.style as any).webkitUserSelect = 'none';
       (canvas.style as any).msTouchAction   = 'none';
 
-      // ── RAF-based drawing untuk zero-lag ───────────────────────────────────
-      // Kumpulkan semua titik dari event (bisa 60-120/detik di XHB),
-      // lalu flush sekaligus di satu requestAnimationFrame.
-      // Ini eliminasi delay karena rendering sync di setiap event.
-      const pendingPoints: { x: number; y: number }[] = [];
-      let rafId: number | null = null;
+      // ── DRAWING ENGINE — optimized untuk XHB hardware ─────────────────────
+      //
+      // KENAPA TIDAK PAKAI RAF:
+      // XHB player sering jalan di hardware lemah dengan vsync 30fps.
+      // requestAnimationFrame di sana = nunggu 33ms per stroke = lambat banget.
+      // Solusi: draw SYNCHRONOUS langsung di event handler — tidak ada delay.
+      //
+      // KENAPA TIDAK getImageData di setiap onStart:
+      // getImageData membaca seluruh pixel canvas ke CPU memory — di canvas
+      // besar (1920x1080 @ 2x DPR = 4K pixel) ini butuh 10-30ms.
+      // Solusi: simpan history hanya setelah stroke selesai (onEnd), bukan onStart.
+      //
+      // KENAPA signalActivity tidak dipanggil di onMove:
+      // Setiap panggil → React setState → re-render component → delay visual.
+      // Solusi: throttle ke max 1x per 500ms.
 
-      const flushPoints = () => {
-        rafId = null;
-        const ctx = ctxRef.current;
-        if (!ctx || pendingPoints.length === 0) return;
-        for (const p of pendingPoints) {
-          ctx.lineTo(p.x, p.y);
-        }
-        ctx.stroke();
-        // Lanjut path dari titik terakhir
-        const last = pendingPoints[pendingPoints.length - 1];
-        ctx.beginPath();
-        ctx.moveTo(last.x, last.y);
-        pendingPoints.length = 0; // clear buffer
-      };
+      let lastActivitySignal = 0;
 
-      const scheduleFlush = () => {
-        if (rafId === null) {
-          rafId = requestAnimationFrame(flushPoints);
+      const signalActivityThrottled = () => {
+        const now = Date.now();
+        if (now - lastActivitySignal > 500) {
+          lastActivitySignal = now;
+          signalActivity();
         }
       };
 
@@ -284,19 +283,14 @@ export const EnhancedCanvas = forwardRef<EnhancedCanvasHandle, EnhancedCanvasPro
         const pos = getPos(e, canvas);
         if (!pos) return;
 
-        // Cancel pending RAF dari stroke sebelumnya
-        if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
-        pendingPoints.length = 0;
-
-        const snap = ctxRef.current.getImageData(0, 0, canvas.width, canvas.height);
-        setHistory(prev => [...prev.slice(-19), snap]);
         applyToolRef.current();
         ctxRef.current.beginPath();
         ctxRef.current.moveTo(pos.x, pos.y);
         isDrawingRef.current = true;
         lastPosRef.current   = pos;
+
         if (!hasContent) { setHasContent(true); onDrawStart?.(); }
-        signalActivity();
+        signalActivity(); // OK di onStart — hanya sekali per stroke
       };
 
       const onMove = (e: Event) => {
@@ -304,26 +298,40 @@ export const EnhancedCanvas = forwardRef<EnhancedCanvasHandle, EnhancedCanvasPro
         if (!isDrawingRef.current || !ctxRef.current) return;
         const pos = getPos(e, canvas);
         if (!pos) return;
-        // Skip identical coords (XHB duplicate events)
+
+        // Skip posisi identik (XHB sering kirim duplikat)
         if (lastPosRef.current) {
-          if (Math.abs(pos.x - lastPosRef.current.x) < 0.5 &&
-              Math.abs(pos.y - lastPosRef.current.y) < 0.5) return;
+          const dx = pos.x - lastPosRef.current.x;
+          const dy = pos.y - lastPosRef.current.y;
+          if (dx * dx + dy * dy < 1) return; // distance² < 1px → skip
         }
-        pendingPoints.push(pos);
+
+        // SYNCHRONOUS draw — tidak ada RAF, tidak ada buffer, langsung ke canvas
+        ctxRef.current.lineTo(pos.x, pos.y);
+        ctxRef.current.stroke();
+        // Buka path baru dari titik ini agar stroke tidak redrawn dari awal
+        ctxRef.current.beginPath();
+        ctxRef.current.moveTo(pos.x, pos.y);
+
         lastPosRef.current = pos;
-        scheduleFlush();
-        signalActivity();
+        signalActivityThrottled(); // throttled agar tidak trigger re-render tiap pixel
       };
 
       const onEnd = (e: Event) => {
         if (e.cancelable) e.preventDefault();
-        // Flush sisa points sebelum close
-        if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
-        flushPoints();
-        ctxRef.current?.closePath();
+        if (!ctxRef.current) return;
+
+        ctxRef.current.closePath();
         isDrawingRef.current = false;
         lastPosRef.current   = null;
-        pendingPoints.length = 0;
+
+        // Simpan history SETELAH stroke selesai — getImageData tidak block onStart
+        const cvs = canvasRef.current;
+        if (cvs && ctxRef.current) {
+          const snap = ctxRef.current.getImageData(0, 0, cvs.width, cvs.height);
+          setHistory(prev => [...prev.slice(-19), snap]);
+        }
+
         setTimeout(() => { pointerActiveRef.current = false; }, 50);
       };
 
@@ -380,10 +388,22 @@ export const EnhancedCanvas = forwardRef<EnhancedCanvasHandle, EnhancedCanvasPro
       const canvas = canvasRef.current;
       const ctx    = ctxRef.current;
       if (!canvas || !ctx) return;
-      const w = canvas.width / (window.devicePixelRatio || 1);
-      const h = canvas.height / (window.devicePixelRatio || 1);
-      if (isKiosk) { ctx.clearRect(0, 0, w, h); }
-      else         { ctx.fillStyle = cfg.bg; ctx.fillRect(0, 0, w, h); }
+
+      // FIX: reset transform ke identity dulu sebelum clear.
+      // Saat draw, ctx sudah di-scale DPR (mis. 2x).
+      // Kalau clearRect dipanggil dengan transform aktif, hanya sebagian
+      // canvas yang terhapus → sisa coretan tetap kelihatan.
+      // Solusi: save → setTransform identity → clear raw pixel size → restore.
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      if (isKiosk) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      } else {
+        ctx.fillStyle = cfg.bg;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+      ctx.restore();
+
       setHistory([]);
       setHasContent(false);
       onClear?.();
@@ -442,8 +462,11 @@ export const EnhancedCanvas = forwardRef<EnhancedCanvasHandle, EnhancedCanvasPro
       setSubmitting(true);
       const data = await getComposite();
       onSubmit(data);
+      // Clear canvas SEGERA setelah data diambil — jangan tunggu success animation
+      // supaya user tidak lihat coretan lama saat success toast muncul
+      clearCanvas();
       setShowSuccess(true);
-      setTimeout(async () => { clearCanvas(); setShowSuccess(false); setSubmitting(false); }, 2500);
+      setTimeout(() => { setShowSuccess(false); setSubmitting(false); }, 2500);
     }, [submitting, isEnded, isCanvasEmpty, getComposite, onSubmit, clearCanvas]);
 
     useImperativeHandle(ref, () => ({
