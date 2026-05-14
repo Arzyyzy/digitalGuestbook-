@@ -35,8 +35,8 @@ const THEME_META = {
   corporate:  { bg: '#f1f3f6', accent: '#334155', heart: '#64748b' },
 } as const;
 
-const IDLE_TRIGGER_MS  = 90_000; // 90 detik tidak ada aktivitas
-const IDLE_WARNING_SEC = 60;     // countdown 60 detik
+const IDLE_TRIGGER_MS  = 30_000; // 30 detik tidak ada aktivitas
+const IDLE_WARNING_SEC = 20;     // countdown 20 detik
 
 export function GuestbookKiosk() {
   const { settings, settingsLoading, settingsError, storageError, addMessage } = useGuestbook();

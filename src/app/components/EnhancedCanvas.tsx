@@ -85,6 +85,7 @@ export const EnhancedCanvas = forwardRef<EnhancedCanvasHandle, EnhancedCanvasPro
     const ctxRef          = useRef<CanvasRenderingContext2D | null>(null);
     const isDrawingRef    = useRef(false);
     const lastPosRef      = useRef<{ x: number; y: number } | null>(null);
+    const rectRef         = useRef<DOMRect | null>(null);
     const pointerActiveRef = useRef(false); // deduplicate touch vs pointer
     const toolbarIdleTimer = useRef<number | null>(null);
 
@@ -167,6 +168,8 @@ export const EnhancedCanvas = forwardRef<EnhancedCanvasHandle, EnhancedCanvasPro
         ctx.fillRect(0, 0, w, h);
       }
 
+      // Cache the canvas screen rectangle once on init.
+      rectRef.current = canvas.getBoundingClientRect();
       console.log('[Canvas] Init OK:', w + 'x' + h, '@ DPR', dpr);
       return true;
     }, [cfg.bg, isKiosk]);
@@ -192,6 +195,18 @@ export const EnhancedCanvas = forwardRef<EnhancedCanvasHandle, EnhancedCanvasPro
 
       return () => { alive = false; clearTimeout(tid); ro.disconnect(); };
     }, [initCanvas]);
+
+    useEffect(() => {
+      if (!ready) return;
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const updateRect = () => {
+        rectRef.current = canvas.getBoundingClientRect();
+      };
+      updateRect();
+      window.addEventListener('resize', updateRect);
+      return () => window.removeEventListener('resize', updateRect);
+    }, [ready]);
 
     // ── Tool application ───────────────────────────────────────────────────────
     const applyTool = useCallback(() => {
@@ -225,10 +240,10 @@ export const EnhancedCanvas = forwardRef<EnhancedCanvasHandle, EnhancedCanvasPro
 
     // ── Position helper ───────────────────────────────────────────────────────
     // XHB sometimes has coordinate offset when transforms exist on ancestors.
-    // We read canvas.getBoundingClientRect only for coordinate mapping (not sizing).
+    // Cache the canvas rectangle to avoid repeating getBoundingClientRect on every move.
     const getPos = (e: Event, canvas: HTMLCanvasElement): { x: number; y: number } | null => {
-      // Use offsetLeft/offsetTop for XHB coordinate offset fix
-      const rect = canvas.getBoundingClientRect();
+      if (!rectRef.current) rectRef.current = canvas.getBoundingClientRect();
+      const rect = rectRef.current;
 
       if ('touches' in e) {
         const te = e as TouchEvent;
@@ -280,6 +295,7 @@ export const EnhancedCanvas = forwardRef<EnhancedCanvasHandle, EnhancedCanvasPro
       const onStart = (e: Event) => {
         if (e.cancelable) e.preventDefault();
         if (!ctxRef.current || isEnded) return;
+        rectRef.current = canvas.getBoundingClientRect();
         const pos = getPos(e, canvas);
         if (!pos) return;
 
