@@ -11,7 +11,7 @@ import {
 import { useGuestbook, EventSettings } from '../contexts/GuestbookContext';
 import { exportGuestbookToPDF, downloadPDF } from '../utils/pdfExport';
 import { uploadToCloudinary } from '../../lib/cloudinary';
-import { updateAppSettings } from '../../lib/supabase';
+import { updateAppSettings, uploadPdfToStorage } from '../../lib/supabase';
 
 type Section = 'overview' | 'settings' | 'assets' | 'messages' | 'export';
 
@@ -91,6 +91,9 @@ export function AdminDashboard() {
 
   const [pdfProgress, setPdfProgress] = useState<{ current: number; total: number } | null>(null);
   const [pdfDone, setPdfDone] = useState(false);
+  const [pdfLink, setPdfLink] = useState<string | null>(null);
+  const [pdfUploadError, setPdfUploadError] = useState<string | null>(null);
+  const [isGeneratingPdfLink, setIsGeneratingPdfLink] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [resetConfirm, setResetConfirm] = useState(false);
   const [endConfirm, setEndConfirm] = useState(false);
@@ -317,6 +320,39 @@ export function AdminDashboard() {
     } catch (err) {
       console.error('PDF export failed:', err);
     } finally {
+      setTimeout(() => {
+        setPdfProgress(null);
+        setPdfDone(false);
+      }, 3000);
+    }
+  };
+
+  const handleGeneratePdfLink = async () => {
+    if (messages.length === 0) return;
+    setPdfProgress({ current: 0, total: messages.length });
+    setPdfDone(false);
+    setPdfUploadError(null);
+    setPdfLink(null);
+    setIsGeneratingPdfLink(true);
+
+    try {
+      const bytes = await exportGuestbookToPDF(
+        messages,
+        settings,
+        (current, total) => setPdfProgress({ current, total })
+      );
+
+      const safeName = settings.name.replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, '-');
+      const filename = `Guestbook-${safeName}-${settings.date}.pdf`;
+      const publicUrl = await uploadPdfToStorage(bytes, filename);
+      setPdfLink(publicUrl);
+      setPdfDone(true);
+    } catch (err) {
+      console.error('PDF generate/upload failed:', err);
+      const message = err instanceof Error ? err.message : 'Gagal membuat atau mengunggah PDF.';
+      setPdfUploadError(message);
+    } finally {
+      setIsGeneratingPdfLink(false);
       setTimeout(() => {
         setPdfProgress(null);
         setPdfDone(false);
@@ -1005,19 +1041,69 @@ export function AdminDashboard() {
                     </div>
                   </div>
                 ) : (
-                  <button
-                    onClick={handleExportPDF}
-                    disabled={messages.length === 0}
-                    className="flex items-center gap-2 px-6 py-2.5 rounded-xl font-semibold text-sm transition-all hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed"
-                    style={{
-                      background: 'linear-gradient(135deg,#C9A84C,#F0D080)',
-                      color: '#1a0e00',
-                      boxShadow: '0 4px 20px rgba(201,168,76,0.35)',
-                    }}
-                  >
-                    <FileDown className="w-4 h-4" />
-                    Export {messages.length} Pesan ke PDF
-                  </button>
+                  <div className="space-y-3">
+                    <button
+                      onClick={handleExportPDF}
+                      disabled={messages.length === 0}
+                      className="flex items-center gap-2 px-6 py-2.5 rounded-xl font-semibold text-sm transition-all hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed"
+                      style={{
+                        background: 'linear-gradient(135deg,#C9A84C,#F0D080)',
+                        color: '#1a0e00',
+                        boxShadow: '0 4px 20px rgba(201,168,76,0.35)',
+                      }}
+                    >
+                      <FileDown className="w-4 h-4" />
+                      Export {messages.length} Pesan ke PDF
+                    </button>
+
+                    <button
+                      onClick={handleGeneratePdfLink}
+                      disabled={messages.length === 0 || isGeneratingPdfLink}
+                      className="flex items-center gap-2 px-6 py-2.5 rounded-xl font-semibold text-sm transition-all hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed"
+                      style={{
+                        background: 'rgba(255,255,255,0.08)',
+                        color: '#fff',
+                        border: '1px solid rgba(255,255,255,0.12)',
+                      }}
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                      {isGeneratingPdfLink ? 'Membuat QR...' : 'Buat QR Download PDF'}
+                    </button>
+                  </div>
+                )}
+
+                {pdfUploadError && (
+                  <p className="text-xs text-red-300" style={{ color: 'rgba(248,113,113,0.9)' }}>
+                    {pdfUploadError}
+                  </p>
+                )}
+
+                {pdfLink && (
+                  <div className="rounded-2xl p-4 border border-white/10 bg-white/5">
+                    <p className="text-sm font-medium text-white mb-3">Scan QR untuk download PDF</p>
+                    <div className="flex flex-col md:flex-row gap-4 items-center">
+                      <div className="flex-shrink-0 rounded-2xl p-2" style={{ background: 'rgba(255,255,255,0.08)' }}>
+                        <img
+                          src={`https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(pdfLink)}`}
+                          alt="QR code download PDF"
+                          className="w-44 h-44"
+                        />
+                      </div>
+                      <div className="space-y-2 break-words">
+                        <a
+                          href={pdfLink}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-sm font-semibold text-[#F0D080] underline"
+                        >
+                          Buka link PDF di perangkat lain
+                        </a>
+                        <p className="text-xs" style={{ color: 'rgba(255,255,255,0.55)' }}>
+                          Scan QR ini dengan ponsel untuk membuka dan mendownload hasil PDF.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
                 )}
 
                 {messages.length === 0 && (

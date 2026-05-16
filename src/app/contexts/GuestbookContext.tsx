@@ -1,10 +1,13 @@
 import { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
-import { getAppSettings, updateAppSettings } from '../../lib/supabase';
+import { getAppSettings, updateAppSettings, supabase } from '../../lib/supabase';
 
 export type EventType = 'wedding' | 'graduation' | 'corporate';
 
 const MESSAGES_STORAGE_KEY = 'guestbook_messages';
 const SESSION_MESSAGES_STORAGE_KEY = 'guestbook_messages_session';
+const INDEXEDDB_NAME = 'guestbook_db';
+const INDEXEDDB_STORE = 'messages';
+const INDEXEDDB_VERSION = 1;
 
 function getLogoType(url: string | null): 'image' | 'video' {
   if (!url) return 'image';
@@ -16,6 +19,64 @@ interface StorageSaveResult {
   fallbackUsed: boolean;
 }
 
+function openIndexedDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    if (typeof window === 'undefined' || !window.indexedDB) {
+      reject(new Error('IndexedDB tidak tersedia.'));
+      return;
+    }
+
+    const request = window.indexedDB.open(INDEXEDDB_NAME, INDEXEDDB_VERSION);
+
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(INDEXEDDB_STORE)) {
+        db.createObjectStore(INDEXEDDB_STORE, { keyPath: 'id' });
+      }
+    };
+
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function loadIndexedDBMessages(): Promise<GuestMessage[]> {
+  try {
+    const db = await openIndexedDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(INDEXEDDB_STORE, 'readonly');
+      const store = tx.objectStore(INDEXEDDB_STORE);
+      const request = store.getAll();
+
+      request.onsuccess = () => resolve(request.result as GuestMessage[]);
+      request.onerror = () => reject(request.error);
+    });
+  } catch {
+    return [];
+  }
+}
+
+async function saveIndexedDBMessages(messages: GuestMessage[]): Promise<boolean> {
+  try {
+    const db = await openIndexedDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(INDEXEDDB_STORE, 'readwrite');
+      const store = tx.objectStore(INDEXEDDB_STORE);
+
+      store.clear();
+      for (const message of messages) {
+        store.put(message);
+      }
+
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  } catch {
+    return false;
+  }
+}
+
 function loadStoredMessages(): GuestMessage[] {
   if (typeof window === 'undefined') return [];
   try {
@@ -23,13 +84,6 @@ function loadStoredMessages(): GuestMessage[] {
     if (raw) return JSON.parse(raw) as GuestMessage[];
   } catch {
     window.localStorage.removeItem(MESSAGES_STORAGE_KEY);
-  }
-
-  try {
-    const raw = window.sessionStorage.getItem(SESSION_MESSAGES_STORAGE_KEY);
-    if (raw) return JSON.parse(raw) as GuestMessage[];
-  } catch {
-    window.sessionStorage.removeItem(SESSION_MESSAGES_STORAGE_KEY);
   }
 
   return [];
@@ -50,6 +104,58 @@ function saveStoredMessages(messages: GuestMessage[]): StorageSaveResult {
     } catch {
       return { success: false, fallbackUsed: false };
     }
+  }
+}
+
+async function loadRemoteMessages(): Promise<GuestMessage[]> {
+  try {
+    const { data, error } = await supabase
+      .from('guest_messages')
+      .select('id, waktu, pesan_image_url')
+      .order('waktu', { ascending: true });
+
+    if (error) throw error;
+    return (data ?? []).map((item: any) => ({
+      id: item.id,
+      waktu: item.waktu,
+      pesanImageUrl: item.pesan_image_url,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+async function insertRemoteMessage(message: GuestMessage): Promise<boolean> {
+  try {
+    const { error } = await supabase.from('guest_messages').insert({
+      id: message.id,
+      waktu: message.waktu,
+      pesan_image_url: message.pesanImageUrl,
+    });
+    if (error) throw error;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function deleteRemoteMessage(id: string): Promise<boolean> {
+  try {
+    const { error } = await supabase.from('guest_messages').delete().eq('id', id);
+    if (error) throw error;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function clearRemoteMessages(): Promise<boolean> {
+  try {
+    const { error } = await supabase.from('guest_messages').delete().not('id', 'is', null);
+    if (error) throw error;
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -129,7 +235,12 @@ export function GuestbookProvider({ children }: { children: ReactNode }) {
 
       try {
         const remoteSettings = await getAppSettings();
-        const storedMessages = loadStoredMessages();
+        const remoteMessages = await loadRemoteMessages();
+        let storedMessages = remoteMessages.length > 0 ? remoteMessages : loadStoredMessages();
+
+        if (storedMessages.length === 0) {
+          storedMessages = await loadIndexedDBMessages();
+        }
 
         if (!mounted) return;
 
@@ -162,13 +273,18 @@ export function GuestbookProvider({ children }: { children: ReactNode }) {
 
   const persistMessages = useCallback((next: GuestMessage[]) => {
     const result = saveStoredMessages(next);
-    setStorageError(
-      result.success
-        ? result.fallbackUsed
-          ? 'Penyimpanan lokal penuh. Pesan disimpan sementara di sesi ini dan akan hilang ketika tab ditutup.'
-          : null
-        : 'Penyimpanan lokal penuh. Pesan disimpan di memori, tetapi akan hilang jika halaman dimuat ulang.',
-    );
+    saveIndexedDBMessages(next).catch(() => {
+      // IndexedDB hanya cache tambahan
+    });
+
+    if (!result.success) {
+      setStorageError('Penyimpanan lokal penuh. Pesan disimpan di memori, tetapi akan hilang jika halaman dimuat ulang.');
+    } else if (result.fallbackUsed) {
+      setStorageError('Penyimpanan lokal penuh. Pesan disimpan sementara di sesi ini dan akan hilang ketika tab ditutup.');
+    } else {
+      setStorageError(null);
+    }
+
     return next;
   }, []);
 
@@ -202,7 +318,13 @@ export function GuestbookProvider({ children }: { children: ReactNode }) {
     };
     setMessages(prev => {
       const next = [...prev, msg];
-      return persistMessages(next);
+      persistMessages(next);
+      insertRemoteMessage(msg).then(success => {
+        if (!success) {
+          setStorageError('Gagal menyimpan pesan ke cloud. Pesan disimpan lokal terlebih dahulu.');
+        }
+      });
+      return next;
     });
 
     return msg;
@@ -211,12 +333,27 @@ export function GuestbookProvider({ children }: { children: ReactNode }) {
   const deleteMessage = useCallback((id: string) => {
     setMessages(prev => {
       const next = prev.filter(m => m.id !== id);
-      return persistMessages(next);
+      persistMessages(next);
+      deleteRemoteMessage(id).then(success => {
+        if (!success) {
+          setStorageError('Gagal menghapus pesan di cloud. Perubahan disimpan lokal terlebih dahulu.');
+        }
+      });
+      return next;
     });
   }, [persistMessages]);
 
   const clearMessages = useCallback(() => {
-    setMessages(() => persistMessages([]));
+    setMessages(() => {
+      const next: GuestMessage[] = [];
+      persistMessages(next);
+      clearRemoteMessages().then(success => {
+        if (!success) {
+          setStorageError('Gagal menghapus semua pesan di cloud. Perubahan disimpan lokal terlebih dahulu.');
+        }
+      });
+      return next;
+    });
   }, [persistMessages]);
 
   return (

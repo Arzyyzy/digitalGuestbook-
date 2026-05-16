@@ -129,3 +129,31 @@ export async function updateAppSettings(
 
   return mapRowToSettings(data);
 }
+
+const PDF_STORAGE_BUCKET = 'guestbook-pdfs';
+
+export async function uploadPdfToStorage(
+  fileBytes: Uint8Array,
+  filename: string
+): Promise<string> {
+  const path = `exports/${filename}`;
+  const blob = new Blob([fileBytes], { type: 'application/pdf' });
+
+  const { data, error } = await supabase.storage
+    .from(PDF_STORAGE_BUCKET)
+    .upload(path, blob, { upsert: true });
+
+  if (error) {
+    throw new Error(`Failed to upload PDF: ${error.message}`);
+  }
+
+  const { data: publicUrlData, error: urlError } = await supabase.storage
+    .from(PDF_STORAGE_BUCKET)
+    .getPublicUrl(path);
+
+  if (urlError || !publicUrlData?.publicUrl) {
+    throw new Error(`Failed to get public URL for PDF: ${urlError?.message ?? 'no url returned'}`);
+  }
+
+  return publicUrlData.publicUrl;
+}
