@@ -6,20 +6,23 @@ import {
   LogOut, Eye, Trash2, Upload, CheckCircle, XCircle,
   Power, RefreshCw, ExternalLink, Lock, ChevronRight,
   Calendar, MapPin, Tag, Shield, Loader2,
-  AlertTriangle, Heart, GraduationCap, Briefcase,
+  AlertTriangle, Heart, GraduationCap, Briefcase, BarChart3,
 } from 'lucide-react';
 import { useGuestbook, EventSettings } from '../contexts/GuestbookContext';
+import { MessagesTab } from './AdminDashboard/MessagesTab';
+import { AnalyticsTab } from './AdminDashboard/AnalyticsTab';
 import { exportGuestbookToPDF, downloadPDF } from '../utils/pdfExport';
 import { uploadToCloudinary } from '../../lib/cloudinary';
 import { updateAppSettings, uploadPdfToStorage } from '../../lib/supabase';
 
-type Section = 'overview' | 'settings' | 'assets' | 'messages' | 'export';
+type Section = 'overview' | 'settings' | 'assets' | 'messages' | 'analytics' | 'export';
 
 const NAV_ITEMS: { id: Section; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'settings', label: 'Pengaturan', icon: Settings },
   { id: 'assets', label: 'Aset & Media', icon: ImagePlus },
   { id: 'messages', label: 'Pesan Tamu', icon: MessageSquare },
+  { id: 'analytics', label: 'Analytics', icon: BarChart3 },
   { id: 'export', label: 'Ekspor & Kontrol', icon: FileDown },
 ];
 
@@ -552,6 +555,24 @@ export function AdminDashboard() {
       {/* MAIN CONTENT */}
       <main className="flex-1 overflow-auto">
         <div className="max-w-4xl mx-auto p-8">
+          {/* Connection Status Bar */}
+          <div className="mb-8 flex items-center justify-between px-6 py-3 rounded-xl" style={{ 
+            background: 'rgba(255,255,255,0.03)', 
+            border: '1px solid rgba(201,168,76,0.1)',
+          }}>
+            <div className="flex items-center gap-2">
+              <div 
+                style={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: '50%',
+                  background: '#10b981',
+                }}
+              />
+              <span className="text-xs font-medium text-slate-300">Admin Dashboard - Realtime Active</span>
+            </div>
+            <span className="text-xs text-slate-500">Last sync: Just now</span>
+          </div>
 
           {/* ── OVERVIEW ── */}
           {section === 'overview' && (
@@ -923,78 +944,11 @@ export function AdminDashboard() {
             </div>
           )}
 
-          {/* ── MESSAGES ── */}
-          {section === 'messages' && (
-            <div className="space-y-6">
-              <div className="flex items-center justify-between mb-6">
-                <div className="flex items-center gap-3">
-                  <h2 className="text-lg font-semibold text-white">Pesan Tamu</h2>
-                  <div className="flex-1 h-px w-12" style={{ background: 'rgba(201,168,76,0.2)' }} />
-                  <span
-                    className="text-xs px-2.5 py-1 rounded-full font-medium"
-                    style={{ background: 'rgba(201,168,76,0.12)', color: GOLD }}
-                  >
-                    {messages.length} ucapan
-                  </span>
-                </div>
+          {/* ── MESSAGES (NEW REALTIME) ── */}
+          {section === 'messages' && <MessagesTab />}
 
-                {messages.length > 0 && (
-                  <button
-                    onClick={() => setResetConfirm(true)}
-                    className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs transition-all hover:bg-red-500/10"
-                    style={{ color: 'rgba(239,68,68,0.7)', border: '1px solid rgba(239,68,68,0.2)' }}
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    Hapus Semua
-                  </button>
-                )}
-              </div>
-
-              {messages.length === 0 ? (
-                <div className="text-center py-20">
-                  <MessageSquare className="w-12 h-12 mx-auto mb-3 opacity-20" style={{ color: GOLD }} />
-                  <p className="text-sm" style={{ color: 'rgba(255,255,255,0.3)' }}>Belum ada pesan tersimpan</p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                  {messages.map(msg => (
-                    <motion.div
-                      key={msg.id}
-                      layout
-                      initial={{ opacity: 0, scale: 0.9 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      exit={{ opacity: 0, scale: 0.9 }}
-                      className="group relative rounded-xl overflow-hidden"
-                      style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(201,168,76,0.12)' }}
-                    >
-                      <img
-                        src={msg.pesanImageUrl}
-                        alt="Message"
-                        className="w-full h-36 object-contain bg-white/5"
-                      />
-                      <div className="p-3">
-                        <p className="text-[10px]" style={{ color: 'rgba(255,255,255,0.35)' }}>
-                          {new Date(msg.waktu).toLocaleString('id-ID', {
-                            day: 'numeric', month: 'short', year: 'numeric',
-                            hour: '2-digit', minute: '2-digit',
-                          })}
-                        </p>
-                      </div>
-
-                      {/* Delete button */}
-                      <button
-                        onClick={() => setDeleteConfirm(msg.id)}
-                        className="absolute top-2 right-2 w-7 h-7 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all"
-                        style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)' }}
-                      >
-                        <Trash2 className="w-3.5 h-3.5 text-red-400" />
-                      </button>
-                    </motion.div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+          {/* ── ANALYTICS ── */}
+          {section === 'analytics' && <AnalyticsTab />}
 
           {/* ── EXPORT & CONTROL ── */}
           {section === 'export' && (

@@ -39,7 +39,7 @@ const IDLE_TRIGGER_MS  = 30_000; // 30 detik tidak ada aktivitas
 const IDLE_WARNING_SEC = 20;     // countdown 20 detik
 
 export function GuestbookKiosk() {
-  const { settings, settingsLoading, settingsError, storageError, addMessage } = useGuestbook();
+  const { settings, settingsLoading, settingsError, storageError, addMessage, isOnline } = useGuestbook();
   const navigate  = useNavigate();
   const canvasRef = useRef<EnhancedCanvasHandle>(null);
 
@@ -48,6 +48,7 @@ export function GuestbookKiosk() {
   const [hasDrawing,    setHasDrawing]    = useState(false);
   const [warnVisible,   setWarnVisible]   = useState(false);
   const [countdown,     setCountdown]     = useState(IDLE_WARNING_SEC);
+  const [isSubmitting,  setIsSubmitting]  = useState(false);
   const [tapCount,      setTapCount]      = useState(0);
   const [tapTimer,      setTapTimer]      = useState<ReturnType<typeof setTimeout> | null>(null);
 
@@ -97,14 +98,21 @@ export function GuestbookKiosk() {
 
   // ── Canvas handlers ────────────────────────────────────────────────────────
 
-  const handleSubmit = useCallback((imageData: string) => {
-    addMessage(imageData);
-    clearTimers();
-    hideWarning();
-    setHasDrawing(false);
-    setShowHearts(true);
-    setShowThx(true);
-    setTimeout(() => setShowThx(false), 3000);
+  const handleSubmit = useCallback(async (imageData: string) => {
+    try {
+      setIsSubmitting(true);
+      await addMessage(imageData);
+      clearTimers();
+      hideWarning();
+      setHasDrawing(false);
+      setShowHearts(true);
+      setShowThx(true);
+      setTimeout(() => setShowThx(false), 4000);
+    } catch (err) {
+      console.error('Failed to submit message:', err);
+    } finally {
+      setIsSubmitting(false);
+    }
   }, [addMessage, clearTimers, hideWarning]);
 
   const handleDrawStart = useCallback(() => {
@@ -166,15 +174,57 @@ export function GuestbookKiosk() {
         *, *::before, *::after { box-sizing: border-box; }
       `}</style>
 
-      {/* ── Storage error toast ─────────────────────────────────────────────── */}
+      {/* ── Storage error toast (enhanced) ─── */}
       {storageError && (
-        <div style={{ position: 'fixed', top: 16, left: 16, right: 16, zIndex: 9500, pointerEvents: 'none' }}>
-          <div style={{ maxWidth: 720, margin: '0 auto', pointerEvents: 'auto' }}>
+        <div style={{ position: 'fixed', top: 20, left: 20, right: 20, zIndex: 9500, pointerEvents: 'none' }}>
+          <div style={{ maxWidth: 600, margin: '0 auto', pointerEvents: 'auto' }}>
             <Alert variant="destructive">
-              <AlertTitle>Masalah Penyimpanan</AlertTitle>
+              <AlertTitle>⚠️ Masalah Penyimpanan</AlertTitle>
               <AlertDescription>{storageError}</AlertDescription>
             </Alert>
           </div>
+        </div>
+      )}
+      
+      {/* ── Submitting loader overlay ─── */}
+      {isSubmitting && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 8500,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'rgba(0,0,0,0.3)',
+          touchAction: 'none',
+        }}>
+          <div style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 16,
+          }}>
+            {/* Spinner */}
+            <div style={{
+              width: 48,
+              height: 48,
+              borderRadius: '50%',
+              border: '3px solid rgba(255,255,255,0.2)',
+              borderTopColor: '#fff',
+              animation: 'spin 1s linear infinite',
+            }} />
+            <p style={{
+              color: '#fff',
+              fontSize: 15,
+              fontWeight: 500,
+            }}>Mengunggah ucapan Anda...</p>
+          </div>
+          <style>{`
+            @keyframes spin {
+              from { transform: rotate(0deg); }
+              to { transform: rotate(360deg); }
+            }
+          `}</style>
         </div>
       )}
 
@@ -337,7 +387,7 @@ export function GuestbookKiosk() {
         color={meta.heart}
       />
 
-      {/* ── Thank-you toast ─── */}
+      {/* ── Thank-you modal (enhanced) ─── */}
       {showThx && (
         <div style={{
           position:   'fixed',
@@ -346,40 +396,113 @@ export function GuestbookKiosk() {
           display:    'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          background: 'rgba(0,0,0,0.35)',
+          background: 'rgba(0,0,0,0.5)',
           touchAction:'none',
+          animation:  'fadeIn 0.3s ease-out',
         }}>
+          <style>{`
+            @keyframes fadeIn {
+              from { opacity: 0; }
+              to { opacity: 1; }
+            }
+            @keyframes slideUp {
+              from { transform: translateY(20px); opacity: 0; }
+              to { transform: translateY(0); opacity: 1; }
+            }
+            @keyframes pulse {
+              0%, 100% { transform: scale(1); }
+              50% { transform: scale(1.1); }
+            }
+            @keyframes progress4s {
+              from { width: 0% }
+              to { width: 100% }
+            }
+          `}</style>
+          
           <div style={{
-            background:   '#fff',
-            borderRadius: 24,
-            padding:      '32px 44px',
-            textAlign:    'center',
-            maxWidth:     300,
-            boxShadow:    '0 20px 56px rgba(0,0,0,0.22)',
+            background: 'linear-gradient(135deg, #ffffff 0%, #f8fafb 100%)',
+            borderRadius: 28,
+            padding: '48px 44px',
+            textAlign: 'center',
+            maxWidth: 360,
+            boxShadow: '0 25px 60px rgba(0,0,0,0.3), 0 0 0 1px rgba(0,0,0,0.05)',
+            animation: 'slideUp 0.4s ease-out',
+            border: `1px solid ${meta.accent}22`,
           }}>
-            <div style={{ fontSize: 44, marginBottom: 10 }}>✨</div>
-            <h2 style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.35rem', color: '#1f2937', margin: '0 0 6px' }}>
+            {/* Success emoji animation */}
+            <div style={{
+              fontSize: 56,
+              marginBottom: 16,
+              animation: 'pulse 0.6s ease-in-out',
+            }}>✨</div>
+            
+            {/* Title */}
+            <h2 style={{
+              fontFamily: "'Playfair Display', 'Georgia', serif",
+              fontSize: '1.75rem',
+              fontWeight: 700,
+              color: '#1f2937',
+              margin: '0 0 8px',
+              letterSpacing: '-0.5px',
+            }}>
               Terima Kasih!
             </h2>
-            <p style={{ fontSize: 13, color: '#6b7280', margin: '0 0 18px' }}>
+            
+            {/* Subtitle */}
+            <p style={{
+              fontSize: 15,
+              color: '#6b7280',
+              margin: '0 0 20px',
+              lineHeight: 1.5,
+            }}>
               Ucapan Anda telah tersimpan dengan indah
             </p>
-            {/* Linear progress bar */}
-            <div style={{ height: 4, borderRadius: 2, background: '#f3f4f6', overflow: 'hidden' }}>
+            
+            {/* Status indicator */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 8,
+              padding: '10px 14px',
+              background: isOnline ? 'rgba(16,185,129,0.08)' : 'rgba(245,158,11,0.08)',
+              borderRadius: 10,
+              marginBottom: 20,
+              border: `1px solid ${isOnline ? 'rgba(16,185,129,0.2)' : 'rgba(245,158,11,0.2)'}`,
+            }}>
               <div style={{
-                height: '100%', borderRadius: 2,
+                width: 8,
+                height: 8,
+                borderRadius: '50%',
+                background: isOnline ? '#10b981' : '#f59e0b',
+                animation: isOnline ? 'none' : 'pulse 2s infinite',
+              }} />
+              <span style={{
+                fontSize: 13,
+                fontWeight: 600,
+                color: isOnline ? '#059669' : '#92400e',
+              }}>
+                {isOnline ? '✓ Tersimpan ke cloud' : '⏳ Dalam antrian'}
+              </span>
+            </div>
+            
+            {/* Progress bar */}
+            <div style={{
+              height: 3,
+              borderRadius: 2,
+              background: '#e5e7eb',
+              overflow: 'hidden',
+            }}>
+              <div style={{
+                height: '100%',
+                borderRadius: 2,
                 background: `linear-gradient(to right, ${meta.accent}, #F4D03F)`,
-                animation: 'progress3s 3s linear forwards',
+                animation: 'progress4s 4s linear forwards',
               }} />
             </div>
           </div>
         </div>
       )}
-
-      {/* Keyframe for thank-you progress bar */}
-      <style>{`
-        @keyframes progress3s { from { width: 0% } to { width: 100% } }
-      `}</style>
     </>
   );
 }

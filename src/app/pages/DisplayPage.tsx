@@ -141,22 +141,27 @@ export function DisplayPage() {
     if (!hasDrawing) return;
     let count = 15;
     setIdleCountdown(count);
-    intervalRef.current = setInterval(() => {
+    intervalRef.current = setInterval(async () => {
       count--;
       setIdleCountdown(count);
       if (count <= 0) {
         clearInterval(intervalRef.current!);
         setIdleCountdown(null);
-        // Auto-submit
-        const imageData = canvasRef.current?.getImageData();
-        if (imageData && !canvasRef.current?.isEmpty()) {
-          addMessage(imageData);
-          setShowHearts(true);
-          setShowSuccess(true);
-          setHasDrawing(false);
-          canvasRef.current?.reset();
-          setTimeout(() => setShowSuccess(false), 3000);
-        } else {
+        try {
+          const imageData = canvasRef.current?.getImageData();
+          if (imageData && !canvasRef.current?.isEmpty()) {
+            await addMessage(imageData);
+            setShowHearts(true);
+            setShowSuccess(true);
+            setHasDrawing(false);
+            canvasRef.current?.reset();
+            setTimeout(() => setShowSuccess(false), 3000);
+          } else {
+            canvasRef.current?.reset();
+            setHasDrawing(false);
+          }
+        } catch (err) {
+          console.error('Failed to auto-submit message:', err);
           canvasRef.current?.reset();
           setHasDrawing(false);
         }
@@ -170,13 +175,17 @@ export function DisplayPage() {
     setIdleCountdown(null);
   }, []);
 
-  const handleSubmit = useCallback((imageData: string) => {
-    cancelCountdown();
-    addMessage(imageData);
-    setShowHearts(true);
-    setShowSuccess(true);
-    setHasDrawing(false);
-    setTimeout(() => setShowSuccess(false), 3000);
+  const handleSubmit = useCallback(async (imageData: string) => {
+    try {
+      cancelCountdown();
+      await addMessage(imageData);
+      setShowHearts(true);
+      setShowSuccess(true);
+      setHasDrawing(false);
+      setTimeout(() => setShowSuccess(false), 3000);
+    } catch (err) {
+      console.error('Failed to submit message:', err);
+    }
   }, [addMessage, cancelCountdown]);
 
   // Idle timeout — if drawing, start countdown; if empty, just reset
@@ -228,7 +237,32 @@ export function DisplayPage() {
         .fixed {
           z-index: 10002 !important;
         }
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.5; }
+        }
       `}</style>
+      
+      {/* Connection Status Badge (top right) */}
+      <div 
+        className="fixed top-4 right-4 z-10001 flex items-center gap-2 px-3 py-1.5 rounded-full"
+        style={{
+          background: 'rgba(16,185,129,0.1)',
+          border: '1px solid rgba(16,185,129,0.3)',
+          backdropFilter: 'blur(8px)',
+        }}
+      >
+        <div 
+          style={{
+            width: 6,
+            height: 6,
+            borderRadius: '50%',
+            background: '#10b981',
+            animation: 'pulse 2s infinite',
+          }}
+        />
+        <span className="text-xs font-medium text-emerald-300">Live</span>
+      </div>
       {/* ═══ ZONE 1: TOP 30vh — Reserved for Xibo slideshow / Recent messages ═══ */}
       <div
         className="relative overflow-hidden flex-shrink-0"

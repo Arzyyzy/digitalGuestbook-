@@ -3,7 +3,16 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 const SUPABASE_URL = getEnvVar('VITE_SUPABASE_URL');
 const SUPABASE_ANON_KEY = getEnvVar('VITE_SUPABASE_ANON_KEY');
 
+console.log('[Supabase Init] Connecting to:', SUPABASE_URL?.split('//')[1]);
+
 export const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// Test connection on initialization
+supabase.auth.getSession().then(({ data }) => {
+  console.log('[Supabase] Connection established. Session:', data?.session ? 'exists' : 'none');
+}).catch(err => {
+  console.error('[Supabase] Connection failed:', err);
+});
 
 export interface AppSettings {
   frameUrl: string | null;

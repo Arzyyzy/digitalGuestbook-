@@ -1,162 +1,59 @@
 import { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
-import { getAppSettings, updateAppSettings, supabase } from '../../lib/supabase';
+import { getAppSettings, updateAppSettings } from '../../lib/supabase';
+import {
+  getGuestMessages,
+  insertGuestMessage,
+  softDeleteMessage,
+  clearEventMessages,
+  GuestMessage as SupabaseMessage,
+  GuestMessageInput,
+} from '../../lib/supabaseMessages';
+import {
+  addToQueue,
+  clearQueue,
+  getQueue,
+  isOnline,
+  subscribeToOnlineStatus,
+} from '../../lib/offlineQueue';
+import { uploadToCloudinary } from '../../lib/cloudinary';
 
+export type SyncStatus = 'queued' | 'syncing' | 'synced' | 'failed';
 export type EventType = 'wedding' | 'graduation' | 'corporate';
 
-const MESSAGES_STORAGE_KEY = 'guestbook_messages';
-const SESSION_MESSAGES_STORAGE_KEY = 'guestbook_messages_session';
-const INDEXEDDB_NAME = 'guestbook_db';
-const INDEXEDDB_STORE = 'messages';
-const INDEXEDDB_VERSION = 1;
+const DEVICE_ID_KEY = 'guestbook_device_id';
+const EVENT_ID = 'default-event';
+
+function getOrCreateDeviceId(): string {
+  if (typeof window === 'undefined') return '';
+  try {
+    let deviceId = window.localStorage.getItem(DEVICE_ID_KEY);
+    if (!deviceId) {
+      deviceId = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+      window.localStorage.setItem(DEVICE_ID_KEY, deviceId);
+    }
+    return deviceId;
+  } catch {
+    return `${Date.now()}-${Math.random()}`;
+  }
+}
 
 function getLogoType(url: string | null): 'image' | 'video' {
   if (!url) return 'image';
   return /\.(mp4|webm|mov|m4v)(\?|$)/i.test(url) ? 'video' : 'image';
 }
 
-interface StorageSaveResult {
-  success: boolean;
-  fallbackUsed: boolean;
+interface GuestMessageDisplay {
+  id: string;
+  waktu: string;
+  pesanImageUrl: string;
 }
 
-function openIndexedDB(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    if (typeof window === 'undefined' || !window.indexedDB) {
-      reject(new Error('IndexedDB tidak tersedia.'));
-      return;
-    }
-
-    const request = window.indexedDB.open(INDEXEDDB_NAME, INDEXEDDB_VERSION);
-
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(INDEXEDDB_STORE)) {
-        db.createObjectStore(INDEXEDDB_STORE, { keyPath: 'id' });
-      }
-    };
-
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-
-async function loadIndexedDBMessages(): Promise<GuestMessage[]> {
-  try {
-    const db = await openIndexedDB();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(INDEXEDDB_STORE, 'readonly');
-      const store = tx.objectStore(INDEXEDDB_STORE);
-      const request = store.getAll();
-
-      request.onsuccess = () => resolve(request.result as GuestMessage[]);
-      request.onerror = () => reject(request.error);
-    });
-  } catch {
-    return [];
-  }
-}
-
-async function saveIndexedDBMessages(messages: GuestMessage[]): Promise<boolean> {
-  try {
-    const db = await openIndexedDB();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(INDEXEDDB_STORE, 'readwrite');
-      const store = tx.objectStore(INDEXEDDB_STORE);
-
-      store.clear();
-      for (const message of messages) {
-        store.put(message);
-      }
-
-      tx.oncomplete = () => resolve(true);
-      tx.onerror = () => reject(tx.error);
-      tx.onabort = () => reject(tx.error);
-    });
-  } catch {
-    return false;
-  }
-}
-
-function loadStoredMessages(): GuestMessage[] {
-  if (typeof window === 'undefined') return [];
-  try {
-    const raw = window.localStorage.getItem(MESSAGES_STORAGE_KEY);
-    if (raw) return JSON.parse(raw) as GuestMessage[];
-  } catch {
-    window.localStorage.removeItem(MESSAGES_STORAGE_KEY);
-  }
-
-  return [];
-}
-
-function saveStoredMessages(messages: GuestMessage[]): StorageSaveResult {
-  if (typeof window === 'undefined') return { success: true, fallbackUsed: false };
-  const payload = JSON.stringify(messages);
-
-  try {
-    window.localStorage.setItem(MESSAGES_STORAGE_KEY, payload);
-    window.sessionStorage.removeItem(SESSION_MESSAGES_STORAGE_KEY);
-    return { success: true, fallbackUsed: false };
-  } catch {
-    try {
-      window.sessionStorage.setItem(SESSION_MESSAGES_STORAGE_KEY, payload);
-      return { success: true, fallbackUsed: true };
-    } catch {
-      return { success: false, fallbackUsed: false };
-    }
-  }
-}
-
-async function loadRemoteMessages(): Promise<GuestMessage[]> {
-  try {
-    const { data, error } = await supabase
-      .from('guest_messages')
-      .select('id, waktu, pesan_image_url')
-      .order('waktu', { ascending: true });
-
-    if (error) throw error;
-    return (data ?? []).map((item: any) => ({
-      id: item.id,
-      waktu: item.waktu,
-      pesanImageUrl: item.pesan_image_url,
-    }));
-  } catch {
-    return [];
-  }
-}
-
-async function insertRemoteMessage(message: GuestMessage): Promise<boolean> {
-  try {
-    const { error } = await supabase.from('guest_messages').insert({
-      id: message.id,
-      waktu: message.waktu,
-      pesan_image_url: message.pesanImageUrl,
-    });
-    if (error) throw error;
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function deleteRemoteMessage(id: string): Promise<boolean> {
-  try {
-    const { error } = await supabase.from('guest_messages').delete().eq('id', id);
-    if (error) throw error;
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function clearRemoteMessages(): Promise<boolean> {
-  try {
-    const { error } = await supabase.from('guest_messages').delete().not('id', 'is', null);
-    if (error) throw error;
-    return true;
-  } catch {
-    return false;
-  }
+function mapSupabaseToDisplay(msg: SupabaseMessage): GuestMessageDisplay {
+  return {
+    id: msg.id,
+    waktu: msg.createdAt,
+    pesanImageUrl: msg.imageUrl,
+  };
 }
 
 export interface EventSettings {
@@ -190,11 +87,14 @@ interface GuestbookStore {
   settingsLoading: boolean;
   settingsError: string | null;
   storageError: string | null;
+  isOnline: boolean;
+  queueSize: number;
+  syncStatus: Map<string, SyncStatus>;
   saveSettings: (s: EventSettings) => Promise<void>;
   messages: GuestMessage[];
-  addMessage: (imageData: string) => GuestMessage;
-  deleteMessage: (id: string) => void;
-  clearMessages: () => void;
+  addMessage: (imageData: string, guestName?: string) => Promise<GuestMessage>;
+  deleteMessage: (id: string) => Promise<void>;
+  clearMessages: () => Promise<void>;
 }
 
 const DEFAULT_SETTINGS: EventSettings = {
@@ -224,68 +124,69 @@ export function GuestbookProvider({ children }: { children: ReactNode }) {
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [storageError, setStorageError] = useState<string | null>(null);
-
   const [messages, setMessages] = useState<GuestMessage[]>([]);
+  const [online, setOnline] = useState(true);
+  const [queueSize, setQueueSize] = useState(0);
+  const [syncStatus, setSyncStatus] = useState<Map<string, SyncStatus>>(new Map());
 
+  const deviceId = getOrCreateDeviceId();
+
+  // Load initial data
   useEffect(() => {
     let mounted = true;
-    const loadRemoteConfig = async () => {
+
+    const loadInitialData = async () => {
       setSettingsLoading(true);
       setSettingsError(null);
 
       try {
+        // Load settings
         const remoteSettings = await getAppSettings();
-        const remoteMessages = await loadRemoteMessages();
-        let storedMessages = remoteMessages.length > 0 ? remoteMessages : loadStoredMessages();
-
-        if (storedMessages.length === 0) {
-          storedMessages = await loadIndexedDBMessages();
-        }
-
         if (!mounted) return;
 
-        setSettings({
-          ...DEFAULT_SETTINGS,
-          frameUrl: remoteSettings.frameUrl ?? DEFAULT_SETTINGS.frameUrl,
-          logoUrl: remoteSettings.bannerUrl ?? DEFAULT_SETTINGS.logoUrl,
-          logoType: getLogoType(remoteSettings.bannerUrl ?? DEFAULT_SETTINGS.logoUrl),
-          frameWidth: remoteSettings.frameWidth ?? DEFAULT_SETTINGS.frameWidth,
-          frameHeight: remoteSettings.frameHeight ?? DEFAULT_SETTINGS.frameHeight,
-          frameSlotX: remoteSettings.frameSlotX ?? DEFAULT_SETTINGS.frameSlotX,
-          frameSlotY: remoteSettings.frameSlotY ?? DEFAULT_SETTINGS.frameSlotY,
-          frameSlotWidth: remoteSettings.frameSlotWidth ?? DEFAULT_SETTINGS.frameSlotWidth,
-          frameSlotHeight: remoteSettings.frameSlotHeight ?? DEFAULT_SETTINGS.frameSlotHeight,
-        });
-        setMessages(storedMessages);
-        setStorageError(null);
+        setSettings(prev => ({
+          ...prev,
+          frameUrl: remoteSettings.frameUrl ?? prev.frameUrl,
+          logoUrl: remoteSettings.bannerUrl ?? prev.logoUrl,
+          logoType: getLogoType(remoteSettings.bannerUrl ?? prev.logoUrl),
+          frameWidth: remoteSettings.frameWidth ?? prev.frameWidth,
+          frameHeight: remoteSettings.frameHeight ?? prev.frameHeight,
+          frameSlotX: remoteSettings.frameSlotX ?? prev.frameSlotX,
+          frameSlotY: remoteSettings.frameSlotY ?? prev.frameSlotY,
+          frameSlotWidth: remoteSettings.frameSlotWidth ?? prev.frameSlotWidth,
+          frameSlotHeight: remoteSettings.frameSlotHeight ?? prev.frameSlotHeight,
+        }));
+
+        // Load messages from Supabase
+        const remoteMessages = await getGuestMessages(EVENT_ID);
+        if (!mounted) return;
+
+        const displayMessages = remoteMessages.map(mapSupabaseToDisplay);
+        setMessages(displayMessages);
+
+        // Load pending queue
+        const pendingQueue = await getQueue();
+        if (!mounted) return;
+        setQueueSize(pendingQueue.length);
       } catch (err) {
         if (!mounted) return;
-        setSettingsError(err instanceof Error ? err.message : 'Gagal memuat data.');
+        const message = err instanceof Error ? err.message : 'Gagal memuat data';
+        setSettingsError(message);
+        setStorageError(message);
       } finally {
         if (!mounted) return;
         setSettingsLoading(false);
       }
     };
 
-    loadRemoteConfig();
+    loadInitialData();
     return () => { mounted = false; };
   }, []);
 
-  const persistMessages = useCallback((next: GuestMessage[]) => {
-    const result = saveStoredMessages(next);
-    saveIndexedDBMessages(next).catch(() => {
-      // IndexedDB hanya cache tambahan
-    });
-
-    if (!result.success) {
-      setStorageError('Penyimpanan lokal penuh. Pesan disimpan di memori, tetapi akan hilang jika halaman dimuat ulang.');
-    } else if (result.fallbackUsed) {
-      setStorageError('Penyimpanan lokal penuh. Pesan disimpan sementara di sesi ini dan akan hilang ketika tab ditutup.');
-    } else {
-      setStorageError(null);
-    }
-
-    return next;
+  // Listen for online/offline status
+  useEffect(() => {
+    setOnline(isOnline());
+    return subscribeToOnlineStatus(setOnline);
   }, []);
 
   const saveSettings = useCallback(async (s: EventSettings) => {
@@ -304,57 +205,108 @@ export function GuestbookProvider({ children }: { children: ReactNode }) {
         frameSlotHeight: s.frameSlotHeight,
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Gagal menyimpan konfigurasi.';
+      const message = err instanceof Error ? err.message : 'Gagal menyimpan konfigurasi';
       setSettingsError(message);
       throw err;
     }
   }, []);
 
-  const addMessage = useCallback((imageData: string): GuestMessage => {
-    const msg: GuestMessage = {
-      id: crypto.randomUUID?.() ?? Date.now().toString(),
-      waktu: new Date().toISOString(),
-      pesanImageUrl: imageData,
-    };
-    setMessages(prev => {
-      const next = [...prev, msg];
-      persistMessages(next);
-      insertRemoteMessage(msg).then(success => {
-        if (!success) {
-          setStorageError('Gagal menyimpan pesan ke cloud. Pesan disimpan lokal terlebih dahulu.');
-        }
-      });
-      return next;
-    });
+  const addMessage = useCallback(async (imageData: string, guestName?: string): Promise<GuestMessage> => {
+    try {
+      // Upload to Cloudinary
+      let imageUrl = imageData;
+      try {
+        const blob = await (await fetch(imageData)).blob();
+        const file = new File([blob], 'drawing.png', { type: 'image/png' });
+        imageUrl = await uploadToCloudinary(file);
+      } catch (uploadErr) {
+        console.warn('Cloudinary upload failed, using data URL:', uploadErr);
+        // Fall back to data URL if Cloudinary fails
+      }
 
-    return msg;
-  }, [persistMessages]);
+      const messageInput: GuestMessageInput = {
+        eventId: EVENT_ID,
+        guestName,
+        imageUrl,
+        deviceId,
+        metadata: {
+          userAgent: navigator.userAgent,
+        },
+      };
 
-  const deleteMessage = useCallback((id: string) => {
-    setMessages(prev => {
-      const next = prev.filter(m => m.id !== id);
-      persistMessages(next);
-      deleteRemoteMessage(id).then(success => {
-        if (!success) {
-          setStorageError('Gagal menghapus pesan di cloud. Perubahan disimpan lokal terlebih dahulu.');
+      if (isOnline()) {
+        // Try direct Supabase
+        try {
+          const result = await insertGuestMessage(messageInput);
+          const display = mapSupabaseToDisplay(result);
+          setMessages(prev => [...prev, display]);
+          setStorageError(null);
+          return display;
+        } catch (err) {
+          console.error('Supabase insert failed:', err);
+          // Fall back to queue
+          await addToQueue(messageInput);
+          setQueueSize(prev => prev + 1);
+          const qMsg: GuestMessage = {
+            id: `temp-${Date.now()}`,
+            waktu: new Date().toISOString(),
+            pesanImageUrl: imageUrl,
+          };
+          setMessages(prev => [...prev, qMsg]);
+          setStorageError('Pesan akan disimpan setelah koneksi diperbaiki');
+          return qMsg;
         }
-      });
-      return next;
-    });
-  }, [persistMessages]);
+      } else {
+        // Offline: queue directly
+        await addToQueue(messageInput);
+        setQueueSize(prev => prev + 1);
+        const qMsg: GuestMessage = {
+          id: `temp-${Date.now()}`,
+          waktu: new Date().toISOString(),
+          pesanImageUrl: imageUrl,
+        };
+        setMessages(prev => [...prev, qMsg]);
+        setStorageError(null);
+        return qMsg;
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Gagal menyimpan pesan';
+      setStorageError(message);
+      throw err;
+    }
+  }, [deviceId]);
 
-  const clearMessages = useCallback(() => {
-    setMessages(() => {
-      const next: GuestMessage[] = [];
-      persistMessages(next);
-      clearRemoteMessages().then(success => {
-        if (!success) {
-          setStorageError('Gagal menghapus semua pesan di cloud. Perubahan disimpan lokal terlebih dahulu.');
-        }
-      });
-      return next;
-    });
-  }, [persistMessages]);
+  const deleteMessage = useCallback(async (id: string) => {
+    try {
+      if (id.startsWith('temp-')) {
+        // Local temp message, just remove from state
+        setMessages(prev => prev.filter(m => m.id !== id));
+        return;
+      }
+
+      await softDeleteMessage(id);
+      setMessages(prev => prev.filter(m => m.id !== id));
+      setStorageError(null);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Gagal menghapus pesan';
+      setStorageError(message);
+      throw err;
+    }
+  }, []);
+
+  const clearMessages = useCallback(async () => {
+    try {
+      await clearEventMessages(EVENT_ID);
+      await clearQueue();
+      setMessages([]);
+      setQueueSize(0);
+      setStorageError(null);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Gagal menghapus semua pesan';
+      setStorageError(message);
+      throw err;
+    }
+  }, []);
 
   return (
     <GuestbookContext.Provider value={{
@@ -362,6 +314,9 @@ export function GuestbookProvider({ children }: { children: ReactNode }) {
       settingsLoading,
       settingsError,
       storageError,
+      isOnline: online,
+      queueSize,
+      syncStatus,
       saveSettings,
       messages,
       addMessage,
