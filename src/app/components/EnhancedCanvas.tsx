@@ -84,9 +84,9 @@ export const EnhancedCanvas = forwardRef<EnhancedCanvasHandle, EnhancedCanvasPro
     const wrapperRef      = useRef<HTMLDivElement>(null);
     const ctxRef          = useRef<CanvasRenderingContext2D | null>(null);
     const isDrawingRef    = useRef(false);
+    const hasContentRef   = useRef(false);
     const lastPosRef      = useRef<{ x: number; y: number } | null>(null);
     const rectRef         = useRef<DOMRect | null>(null);
-    const pointerActiveRef = useRef(false); // deduplicate touch vs pointer
     const toolbarIdleTimer = useRef<number | null>(null);
 
     // State
@@ -305,31 +305,38 @@ export const EnhancedCanvas = forwardRef<EnhancedCanvasHandle, EnhancedCanvasPro
         isDrawingRef.current = true;
         lastPosRef.current   = pos;
 
-        if (!hasContent) { setHasContent(true); onDrawStart?.(); }
+        if (!hasContentRef.current) {
+          hasContentRef.current = true;
+          setHasContent(true);
+          onDrawStart?.();
+        }
         signalActivity(); // OK di onStart — hanya sekali per stroke
       };
 
-      const onMove = (e: Event) => {
+      const onMove = (e: PointerEvent) => {
         if (e.cancelable) e.preventDefault();
         if (!isDrawingRef.current || !ctxRef.current) return;
-        const pos = getPos(e, canvas);
-        if (!pos) return;
+        const points = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
 
-        // Skip posisi identik (XHB sering kirim duplikat)
-        if (lastPosRef.current) {
-          const dx = pos.x - lastPosRef.current.x;
-          const dy = pos.y - lastPosRef.current.y;
-          if (dx * dx + dy * dy < 1) return; // distance² < 1px → skip
+        for (const point of points) {
+          const pos = getPos(point, canvas);
+          if (!pos) continue;
+
+          // Skip posisi identik (XHB sering kirim duplikat)
+          if (lastPosRef.current) {
+            const dx = pos.x - lastPosRef.current.x;
+            const dy = pos.y - lastPosRef.current.y;
+            if (dx * dx + dy * dy < 1) continue;
+          }
+
+          // Draw synchronous agar tidak menunggu animation frame signage.
+          ctxRef.current.lineTo(pos.x, pos.y);
+          ctxRef.current.stroke();
+          ctxRef.current.beginPath();
+          ctxRef.current.moveTo(pos.x, pos.y);
+          lastPosRef.current = pos;
         }
 
-        // SYNCHRONOUS draw — tidak ada RAF, tidak ada buffer, langsung ke canvas
-        ctxRef.current.lineTo(pos.x, pos.y);
-        ctxRef.current.stroke();
-        // Buka path baru dari titik ini agar stroke tidak redrawn dari awal
-        ctxRef.current.beginPath();
-        ctxRef.current.moveTo(pos.x, pos.y);
-
-        lastPosRef.current = pos;
         signalActivityThrottled(); // throttled agar tidak trigger re-render tiap pixel
       };
 
@@ -351,53 +358,28 @@ export const EnhancedCanvas = forwardRef<EnhancedCanvasHandle, EnhancedCanvasPro
         setTimeout(() => { pointerActiveRef.current = false; }, 50);
       };
 
-      // Pointer capture — keeps pointermove firing even when finger leaves canvas
-      const onPointerDown = (e: Event) => {
-        pointerActiveRef.current = true;
-        try { canvas.setPointerCapture((e as PointerEvent).pointerId); } catch {}
+      // Pointer capture keeps pointermove firing even when finger leaves canvas.
+      const onPointerDown = (e: PointerEvent) => {
+        try { canvas.setPointerCapture(e.pointerId); } catch {}
         onStart(e);
       };
 
-      // Touch (XHB older / Android WebView)
-      const onTouchStart = (e: Event) => { if (!pointerActiveRef.current) onStart(e); };
-      const onTouchMove  = (e: Event) => { if (!pointerActiveRef.current) onMove(e); };
-      const onTouchEnd   = (e: Event) => { if (!pointerActiveRef.current) onEnd(e); };
-
       const opts: AddEventListenerOptions = { passive: false };
 
-      canvas.addEventListener('touchstart',   onTouchStart, opts);
-      canvas.addEventListener('touchmove',    onTouchMove,  opts);
-      canvas.addEventListener('touchend',     onTouchEnd,   opts);
-      canvas.addEventListener('touchcancel',  onTouchEnd,   opts);
-
       canvas.addEventListener('pointerdown',  onPointerDown,  opts);
-      canvas.addEventListener('pointermove',  onMove as EventListener, opts);
+      canvas.addEventListener('pointermove',  onMove, opts);
       canvas.addEventListener('pointerup',    onEnd  as EventListener, opts);
       canvas.addEventListener('pointerleave', onEnd  as EventListener, opts);
       canvas.addEventListener('pointercancel',onEnd  as EventListener, opts);
 
-      // Mouse fallback
-      canvas.addEventListener('mousedown',  onStart as EventListener);
-      canvas.addEventListener('mousemove',  onMove  as EventListener);
-      canvas.addEventListener('mouseup',    onEnd   as EventListener);
-      canvas.addEventListener('mouseleave', onEnd   as EventListener);
-
       return () => {
-        canvas.removeEventListener('touchstart',   onTouchStart);
-        canvas.removeEventListener('touchmove',    onTouchMove);
-        canvas.removeEventListener('touchend',     onTouchEnd);
-        canvas.removeEventListener('touchcancel',  onTouchEnd);
         canvas.removeEventListener('pointerdown',  onPointerDown);
-        canvas.removeEventListener('pointermove',  onMove as EventListener);
+        canvas.removeEventListener('pointermove',  onMove);
         canvas.removeEventListener('pointerup',    onEnd  as EventListener);
         canvas.removeEventListener('pointerleave', onEnd  as EventListener);
         canvas.removeEventListener('pointercancel',onEnd  as EventListener);
-        canvas.removeEventListener('mousedown',    onStart as EventListener);
-        canvas.removeEventListener('mousemove',    onMove  as EventListener);
-        canvas.removeEventListener('mouseup',      onEnd   as EventListener);
-        canvas.removeEventListener('mouseleave',   onEnd   as EventListener);
       };
-    }, [ready, isEnded, hasContent, onDrawStart, signalActivity]);
+    }, [ready, isEnded, onDrawStart, signalActivity]);
 
     // ── Canvas ops ─────────────────────────────────────────────────────────────
     const clearCanvas = useCallback(() => {
@@ -421,6 +403,7 @@ export const EnhancedCanvas = forwardRef<EnhancedCanvasHandle, EnhancedCanvasPro
       ctx.restore();
 
       setHistory([]);
+      hasContentRef.current = false;
       setHasContent(false);
       onClear?.();
       signalActivity();
@@ -432,7 +415,11 @@ export const EnhancedCanvas = forwardRef<EnhancedCanvasHandle, EnhancedCanvasPro
       if (!canvas || !ctx || history.length === 0) return;
       ctx.putImageData(history[history.length - 1], 0, 0);
       setHistory(prev => prev.slice(0, -1));
-      if (history.length <= 1) { setHasContent(false); onClear?.(); }
+      if (history.length <= 1) {
+        hasContentRef.current = false;
+        setHasContent(false);
+        onClear?.();
+      }
     }, [history, onClear]);
 
     const isCanvasEmpty = useCallback((): boolean => {

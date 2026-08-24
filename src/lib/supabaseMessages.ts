@@ -280,6 +280,28 @@ export async function clearEventMessages(eventId: string): Promise<number> {
   return updateResult.count || 0;
 }
 
+/**
+ * Permanently delete all event messages when event ends
+ * Called when admin clicks "Akhiri Event" button
+ * This is a hard delete from database (not soft delete)
+ */
+export async function permanentDeleteAllEventMessages(eventId: string): Promise<number> {
+  console.log(`[Event End] Permanently deleting all messages for event: ${eventId}`);
+  
+  const result = await supabase
+    .from('guest_messages')
+    .delete()
+    .eq('event_id', eventId);
+
+  if (result.error) {
+    throw new Error(`Failed to permanently delete event messages: ${result.error.message}`);
+  }
+
+  const count = result.count || 0;
+  console.log(`[Event End] Successfully deleted ${count} messages`);
+  return count;
+}
+
 function buildGuestMessagesCountQuery(eventId: string, eventColumnName: EventColumnName | null) {
   const query = supabase
     .from('guest_messages')

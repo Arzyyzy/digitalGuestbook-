@@ -26,7 +26,6 @@ import { useNavigate } from 'react-router';
 import { useGuestbook } from '../contexts/GuestbookContext';
 import { EnhancedCanvas, EnhancedCanvasHandle } from '../components/EnhancedCanvas';
 import { HeartAnimation } from '../components/HeartAnimation';
-import { FloatingParticles } from '../components/FloatingParticles';
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert';
 
 const THEME_META = {
@@ -256,11 +255,6 @@ export function GuestbookKiosk() {
             onClear={handleClear}
             className="w-full h-full"
           />
-        </div>
-
-        {/* ── z-3: Floating particles (decorative, pointer-events none) ─── */}
-        <div style={{ position: 'absolute', inset: 0, zIndex: 3, pointerEvents: 'none' }}>
-          <FloatingParticles />
         </div>
 
         {/* ── z-5: Frame PNG overlay — FULLSCREEN ─── */}

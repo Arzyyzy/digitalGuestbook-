@@ -463,12 +463,12 @@ export function AdminDashboard() {
   // ──────── DASHBOARD ────────
   return (
     <div
-      className="min-h-screen flex"
+      className="h-screen min-h-0 flex overflow-hidden"
       style={{ background: '#0d1117', color: '#E5E7EB' }}
     >
       {/* SIDEBAR */}
       <aside
-        className="w-60 flex-shrink-0 flex flex-col min-h-screen sticky top-0"
+        className="w-60 h-full flex-shrink-0 flex flex-col sticky top-0"
         style={{
           background: 'linear-gradient(180deg,#0c1220 0%,#0a0e1a 100%)',
           borderRight: '1px solid rgba(201,168,76,0.12)',
@@ -553,8 +553,8 @@ export function AdminDashboard() {
       </aside>
 
       {/* MAIN CONTENT */}
-      <main className="flex-1 overflow-auto">
-        <div className="max-w-4xl mx-auto p-8">
+      <main className="min-h-0 flex-1 overflow-y-auto">
+        <div className="max-w-4xl mx-auto p-8 pb-12">
           {/* Connection Status Bar */}
           <div className="mb-8 flex items-center justify-between px-6 py-3 rounded-xl" style={{ 
             background: 'rgba(255,255,255,0.03)', 
@@ -1040,7 +1040,7 @@ export function AdminDashboard() {
                         <img
                           src={`https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(pdfLink)}`}
                           alt="QR code download PDF"
-                          className="w-44 h-44"
+                          className="w-36 h-36 max-w-full max-h-[20vh] sm:w-44 sm:h-44 object-contain"
                         />
                       </div>
                       <div className="space-y-2 break-words">

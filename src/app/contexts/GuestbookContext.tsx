@@ -5,6 +5,7 @@ import {
   insertGuestMessage,
   softDeleteMessage,
   clearEventMessages,
+  permanentDeleteAllEventMessages,
   GuestMessage as SupabaseMessage,
   GuestMessageInput,
 } from '../../lib/supabaseMessages';
@@ -194,6 +195,19 @@ export function GuestbookProvider({ children }: { children: ReactNode }) {
     setSettingsError(null);
 
     try {
+      // If event is being ended (transitioned from active to ended),
+      // permanently delete all messages from database
+      if (s.isEnded && !settings.isEnded) {
+        console.log('[Event End Trigger] Cleaning up all messages from database...');
+        try {
+          const deletedCount = await permanentDeleteAllEventMessages(EVENT_ID);
+          console.log(`[Event End] Successfully deleted ${deletedCount} messages`);
+        } catch (cleanupErr) {
+          console.error('[Event End] Cleanup failed, but continuing with settings save:', cleanupErr);
+          // Don't throw - let the event end even if cleanup fails
+        }
+      }
+
       await updateAppSettings({
         frameUrl: s.frameUrl,
         bannerUrl: s.logoUrl,
