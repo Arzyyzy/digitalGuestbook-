@@ -463,19 +463,95 @@ export function AdminDashboard() {
   // ──────── DASHBOARD ────────
   return (
     <div
-      className="h-screen min-h-0 flex overflow-hidden"
+      className="admin-dashboard h-screen min-h-0 flex overflow-hidden"
       style={{ background: '#0d1117', color: '#E5E7EB' }}
     >
+      <style>{`
+        @media (orientation: portrait) and (max-width: 900px) {
+          .admin-dashboard {
+            display: block;
+            height: 100svh;
+            overflow-y: auto;
+            overflow-x: hidden;
+          }
+
+          .admin-dashboard__sidebar {
+            width: 100%;
+            height: auto;
+            min-height: 0;
+            position: relative;
+            top: auto;
+            border-right: 0;
+            border-bottom: 1px solid rgba(201,168,76,0.12);
+          }
+
+          .admin-dashboard__brand { padding: 14px 16px 10px; }
+          .admin-dashboard__event { margin: 0 16px 10px; }
+
+          .admin-dashboard__nav {
+            display: flex;
+            gap: 6px;
+            padding: 0 12px 12px;
+            overflow-x: auto;
+            scrollbar-width: none;
+          }
+
+          .admin-dashboard__nav::-webkit-scrollbar { display: none; }
+          .admin-dashboard__nav button {
+            width: auto;
+            min-width: max-content;
+            padding: 9px 11px;
+            white-space: nowrap;
+          }
+
+          .admin-dashboard__bottom-actions {
+            display: flex;
+            gap: 8px;
+            padding: 0 12px 12px;
+            border-top: 0;
+          }
+
+          .admin-dashboard__bottom-actions a,
+          .admin-dashboard__bottom-actions button {
+            width: auto;
+            flex: 1;
+            justify-content: center;
+          }
+
+          .admin-dashboard__main {
+            width: 100%;
+            min-height: 0;
+            overflow: visible;
+          }
+
+          .admin-dashboard__content {
+            width: 100%;
+            max-width: none;
+            padding: 16px 14px 32px;
+          }
+
+          .admin-dashboard__status {
+            margin-bottom: 18px;
+            padding: 10px 12px;
+            gap: 8px;
+          }
+
+          .admin-dashboard__status > span:last-child { white-space: nowrap; }
+          .admin-dashboard__export-card { padding: 16px; }
+          .admin-dashboard__export-buttons { display: grid; grid-template-columns: 1fr; }
+        }
+      `}</style>
+
       {/* SIDEBAR */}
       <aside
-        className="w-60 h-full flex-shrink-0 flex flex-col sticky top-0"
+        className="admin-dashboard__sidebar w-60 h-full flex-shrink-0 flex flex-col sticky top-0"
         style={{
           background: 'linear-gradient(180deg,#0c1220 0%,#0a0e1a 100%)',
           borderRight: '1px solid rgba(201,168,76,0.12)',
         }}
       >
         {/* Brand */}
-        <div className="p-6 pb-4">
+        <div className="admin-dashboard__brand p-6 pb-4">
           <div className="flex items-center gap-3">
             <div
               className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
@@ -492,7 +568,7 @@ export function AdminDashboard() {
 
         {/* Event name */}
         <div
-          className="mx-4 mb-4 px-3 py-2.5 rounded-xl"
+          className="admin-dashboard__event mx-4 mb-4 px-3 py-2.5 rounded-xl"
           style={{ background: 'rgba(201,168,76,0.06)', border: '1px solid rgba(201,168,76,0.12)' }}
         >
           <p className="text-[10px] uppercase tracking-widest mb-0.5" style={{ color: 'rgba(201,168,76,0.5)' }}>Event Aktif</p>
@@ -506,7 +582,7 @@ export function AdminDashboard() {
         </div>
 
         {/* Nav */}
-        <nav className="flex-1 px-3 space-y-0.5">
+        <nav className="admin-dashboard__nav flex-1 px-3 space-y-0.5">
           {NAV_ITEMS.map(item => {
             const Icon = item.icon;
             const active = section === item.id;
@@ -530,7 +606,7 @@ export function AdminDashboard() {
         </nav>
 
         {/* Bottom actions */}
-        <div className="p-4 space-y-2 border-t" style={{ borderColor: 'rgba(201,168,76,0.1)' }}>
+        <div className="admin-dashboard__bottom-actions p-4 space-y-2 border-t" style={{ borderColor: 'rgba(201,168,76,0.1)' }}>
           <a
             href="/guestbook/display"
             target="_blank"
@@ -553,10 +629,10 @@ export function AdminDashboard() {
       </aside>
 
       {/* MAIN CONTENT */}
-      <main className="min-h-0 flex-1 overflow-y-auto">
-        <div className="max-w-4xl mx-auto p-8 pb-12">
+      <main className="admin-dashboard__main min-h-0 flex-1 overflow-y-auto">
+        <div className="admin-dashboard__content max-w-4xl mx-auto p-8 pb-12">
           {/* Connection Status Bar */}
-          <div className="mb-8 flex items-center justify-between px-6 py-3 rounded-xl" style={{ 
+          <div className="admin-dashboard__status mb-8 flex items-center justify-between px-6 py-3 rounded-xl" style={{ 
             background: 'rgba(255,255,255,0.03)', 
             border: '1px solid rgba(201,168,76,0.1)',
           }}>
@@ -957,7 +1033,7 @@ export function AdminDashboard() {
 
               {/* PDF Export */}
               <div
-                className="rounded-2xl p-6 space-y-4"
+                className="admin-dashboard__export-card rounded-2xl p-6 space-y-4"
                 style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(201,168,76,0.15)' }}
               >
                 <div className="flex items-start gap-3">
@@ -995,7 +1071,7 @@ export function AdminDashboard() {
                     </div>
                   </div>
                 ) : (
-                  <div className="space-y-3">
+                  <div className="admin-dashboard__export-buttons space-y-3">
                     <button
                       onClick={handleExportPDF}
                       disabled={messages.length === 0}
