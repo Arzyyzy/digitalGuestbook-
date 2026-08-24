@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   LayoutDashboard, Settings, ImagePlus, MessageSquare, FileDown,
-  LogOut, Eye, Trash2, Upload, CheckCircle, XCircle,
+  LogOut, Eye, Trash2, Upload, CheckCircle, X, XCircle,
   Power, RefreshCw, ExternalLink, Lock, ChevronRight,
   Calendar, MapPin, Tag, Shield, Loader2,
   AlertTriangle, Heart, GraduationCap, Briefcase, BarChart3,
@@ -1033,29 +1033,52 @@ export function AdminDashboard() {
                 )}
 
                 {pdfLink && (
-                  <div className="rounded-2xl p-4 border border-white/10 bg-white/5">
-                    <p className="text-sm font-medium text-white mb-3">Scan QR untuk download PDF</p>
-                    <div className="flex flex-col md:flex-row gap-4 items-center">
-                      <div className="flex-shrink-0 rounded-2xl p-2" style={{ background: 'rgba(255,255,255,0.08)' }}>
+                  <div
+                    className="fixed inset-0 z-[100] flex items-center justify-center p-4"
+                    style={{ background: 'rgba(0,0,0,0.62)', backdropFilter: 'blur(8px)' }}
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="QR download PDF"
+                  >
+                    <div
+                      className="relative w-full max-w-sm rounded-2xl p-6 text-center shadow-2xl"
+                      style={{
+                        background: '#172033',
+                        border: '1px solid rgba(201,168,76,0.3)',
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setPdfLink(null)}
+                        className="absolute right-3 top-3 rounded-lg p-2 text-white/60 transition-colors hover:bg-white/10 hover:text-white"
+                        aria-label="Tutup QR"
+                      >
+                        <X className="h-5 w-5" />
+                      </button>
+
+                      <p className="mb-4 pr-8 text-base font-semibold text-white">
+                        Scan QR untuk download PDF
+                      </p>
+
+                      <div className="mx-auto w-fit rounded-xl bg-white p-3">
                         <img
-                          src={`https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(pdfLink)}`}
+                          src={`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(pdfLink)}`}
                           alt="QR code download PDF"
-                          className="w-36 h-36 max-w-full max-h-[20vh] sm:w-44 sm:h-44 object-contain"
+                          className="block h-auto w-[min(64vw,256px)] max-h-[58vh] object-contain"
                         />
                       </div>
-                      <div className="space-y-2 break-words">
-                        <a
-                          href={pdfLink}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-sm font-semibold text-[#F0D080] underline"
-                        >
-                          Buka link PDF di perangkat lain
-                        </a>
-                        <p className="text-xs" style={{ color: 'rgba(255,255,255,0.55)' }}>
-                          Scan QR ini dengan ponsel untuk membuka dan mendownload hasil PDF.
-                        </p>
-                      </div>
+
+                      <a
+                        href={pdfLink}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-4 block text-sm font-semibold text-[#F0D080] underline"
+                      >
+                        Buka link PDF di perangkat lain
+                      </a>
+                      <p className="mt-2 text-xs" style={{ color: 'rgba(255,255,255,0.55)' }}>
+                        Scan QR ini dengan ponsel untuk membuka dan mendownload hasil PDF.
+                      </p>
                     </div>
                   </div>
                 )}
